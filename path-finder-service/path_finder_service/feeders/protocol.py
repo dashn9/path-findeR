@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class HtmlFeeder(Protocol):
+    async def feed(self, url: str, html: str, job_id: str) -> None: ...
+    async def force(self, job_id: str) -> None: ...

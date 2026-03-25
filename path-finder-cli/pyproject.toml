@@ -1,0 +1,16 @@
+[project]
+name = "path-finder-cli"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.15",
+    "httpx>=0.28",
+    "rich>=13",
+]
+
+[project.scripts]
+path-finder = "path_finder_cli.main:app"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
