@@ -21,77 +21,68 @@ HTML input  ->  URL pattern detection  ->  Parser  ->  Analyzer  ->  AiParserBui
 ## Architecture
 
 ```
-CLI  --HTTP-->  Service  --PyO3-->  Rust core
-                   |
-          +--------+--------+
-          S3      Jobs     MongoDB
-        (corpus)  (state)  (manifests)
+CLI (Rust)  --HTTP-->  Service (Go)  --CGo/FFI-->  Core (Rust)
+                           |
+                  +--------+--------+
+                  S3      Jobs     MongoDB
+                (corpus)  (state)  (manifests)
 ```
 
 | Component | Language | Role |
 |-----------|----------|------|
-| `path-finder-core` | Rust | All parsing, analysis, and selector logic |
-| `path-finder-service` | Python (FastAPI) | API, job orchestration, storage |
-| `path-finder-cli` | Python (Typer) | Thin CLI client over the service API |
+| `path-finder-core` | Rust | All parsing, analysis, and selector logic (shared lib with C FFI) |
+| `path-finder-service` | Go | Chi HTTP API, job orchestration, S3 + MongoDB storage |
+| `path-finder-cli` | Rust | Thin CLI client (clap) over the service API |
 
 ## Requirements
 
-- Rust 2024 edition (nightly)
-- Python 3.13+
+- Rust 2024 edition
+- Go 1.23+
 - MongoDB
 - AWS S3 (or S3-compatible storage)
 - Redis (optional, for stream-based feeding)
 
-## Setup
+## Build
 
-### Rust core
+### Rust core + CLI
 
 ```bash
-cd path-finder-core
 cargo build --release
 ```
 
-For the Python binding (PyO3):
+This builds `libpath_finder_core.so` (or `.dylib`/`.dll`) and the `path-finder` CLI binary.
+
+### Go service
 
 ```bash
-pip install maturin
-cd path-finder-core
-maturin develop --release
-```
+# Build the Rust core first (the Go service links against it)
+cargo build --release
 
-### Service
-
-```bash
 cd path-finder-service
-pip install -e .
+go build -o path-finder-service ./cmd/server
 ```
+
+## Running the service
 
 Environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `S3_BUCKET` | `path-finder-corpus` | S3 bucket for HTML corpus |
-| `S3_ENDPOINT_URL` | (none) | Custom S3 endpoint (for MinIO, LocalStack, etc.) |
 | `MONGO_URI` | `mongodb://localhost:27017` | MongoDB connection string |
 | `MONGO_DB` | `path_finder` | MongoDB database name |
+| `BIND_ADDR` | `0.0.0.0:8000` | Service listen address |
+| `AI_ENDPOINT` | `https://api.anthropic.com/v1/messages` | LLM endpoint URL |
+| `AI_MODEL` | `claude-sonnet-4-20250514` | LLM model |
 | `ANTHROPIC_API_KEY` | (none) | API key for the LLM |
 
-Run the service:
-
 ```bash
-uvicorn path_finder_service.main:app --host 0.0.0.0 --port 8000
+./path-finder-service
 ```
 
-### CLI
-
-```bash
-cd path-finder-cli
-pip install -e .
-```
+## CLI usage
 
 Set `PATH_FINDER_URL` to point at the service (default: `http://localhost:8000`).
-
-## Usage
 
 ### Feed HTML pages
 
@@ -111,7 +102,7 @@ path-finder force my-job
 ### Check status
 
 ```bash
-path-finder status my-job
+path-finder status <parser-id>
 ```
 
 ### Retrieve manifest
@@ -171,7 +162,7 @@ path-finder regenerate <parser-id> -l title -l price --force
 
 ## Configuration
 
-All configurable via the `PipelineConfig` / Rust `Config`:
+All configurable via `Config` in `path-finder-core`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -189,30 +180,24 @@ All configurable via the `PipelineConfig` / Rust `Config`:
 
 ## Running tests
 
-### Rust
+### Rust (core + CLI)
 
 ```bash
-cd path-finder-core
-cargo test
+cargo test --workspace
 ```
 
-### Python
+### Go (service)
 
 ```bash
 cd path-finder-service
-pip install pytest pytest-asyncio
-pytest
-
-cd path-finder-cli
-pip install pytest
-pytest
+go test ./...
 ```
 
 ## HTML feeders
 
-Two implementations of the feeder interface:
+Two implementations:
 
-- **FunctionFeeder** — direct in-process feeding for CLI and programmatic use
+- **FunctionFeeder** — direct in-process feeding, used by the API endpoints
 - **RedisStreamFeeder** — consumes `(url, html, job_id)` messages from a Redis stream; triggers the pipeline when page count reaches `min_pages` or `force()` is called
 
 ## License

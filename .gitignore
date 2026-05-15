@@ -2,16 +2,9 @@
 target/
 **/*.rs.bk
 
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-.eggs/
-*.whl
-.venv/
-venv/
+# Go
+path-finder-service/path-finder-service
+path-finder-service/vendor/
 
 # IDE
 .idea/
@@ -31,8 +24,3 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
-
-# Maturin
-*.so
-*.dylib
-*.dll

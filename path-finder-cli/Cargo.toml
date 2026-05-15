@@ -1,0 +1,16 @@
+[package]
+name = "path-finder-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "path-finder"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+colored = "3"

@@ -1,6 +1,6 @@
 # path-findeR spec
 
-**Language:** Rust · **Status:** Draft
+**Languages:** Rust (core + CLI) · Go (service) · **Status:** Draft
 
 ---
 
@@ -26,7 +26,7 @@ HTML input  →  URL pattern detection  →  Parser  →  Analyzer  →  AiParse
 
 ### URL pattern detection
 
-**Prerequisite gate** — the pipeline refuses to start if fewer than 2 HTML pages with source URLs are submitted. With 2+ URLs, path-findeR compares them to extract a common pattern using Express-style notation (`:param`).
+**Prerequisite gate** — the pipeline refuses to start if fewer than 2 HTML pages with source URLs are submitted. With 2+ URLs, path-findeR compares them to extract a common pattern using `{}` position markers.
 
 Examples:
 - `shop.example.com/products/123` + `shop.example.com/products/456` → `shop.example.com/products/{}`
@@ -254,40 +254,68 @@ pub struct Config {
 
 ### Components
 
-- `path-finder-core` — Rust library, all parsing/analysis/selector logic
-- `path-finder-service` — Python FastAPI, API, job orchestration, storage
-- `path-finder-cli` — Python Typer, thin client over the service API
+- `path-finder-core` — Rust library (`cdylib` + `rlib`), all parsing/analysis/selector logic, exposes C FFI
+- `path-finder-service` — Go (Chi), HTTP API, job orchestration, storage, calls Rust core via CGo
+- `path-finder-cli` — Rust (clap), thin HTTP client over the service API
 
 ```
-CLI  ──HTTP──→  Service  ──PyO3──→  Rust core
-                   │
-          ┌────────┼────────┐
-          S3      Jobs     MongoDB
-        (corpus)  (state)  (manifests)
+CLI (Rust)  ──HTTP──→  Service (Go)  ──CGo/FFI──→  Rust core (cdylib)
+                           │
+                  ┌────────┼────────┐
+                  S3      Jobs     MongoDB
+                (corpus)  (state)  (manifests)
+```
+
+---
+
+### Rust core boundary (C FFI)
+
+A single entry point exposed via `extern "C"`. Takes JSON strings for pages and config, returns a heap-allocated JSON string with the manifest. The caller must free the returned string. All internal modules are unexposed.
+
+```c
+// path_finder_core.h
+
+// Run the pipeline. Returns heap-allocated JSON manifest, or NULL on error.
+char* pfr_run(const char* pages_json, const char* config_json);
+
+// Free a string returned by pfr_run.
+void pfr_free(char* ptr);
+
+// Get the last error message (thread-local). NULL if no error.
+const char* pfr_last_error(void);
+```
+
+Go calls via CGo:
+
+```go
+// #cgo LDFLAGS: -lpath_finder_core
+// #include "path_finder_core.h"
+import "C"
+
+func RunPipeline(pages [][2]string, config PipelineConfig) (json.RawMessage, error) {
+    // marshal pages + config to JSON, call C.pfr_run, unmarshal result
+}
 ```
 
 ---
 
 ### HTML feeder
 
-An agnostic async interface for feeding `(url, html)` pairs into the system. Two implementations:
+An interface for feeding `(url, html)` pairs into the system. Two implementations:
 
 **Redis stream** — consumes messages off a Redis stream. Each message is a single `(url, html)` pair. Pages accumulate per stream group until the min page count is hit, at which point a pipeline run is triggered automatically. The caller can also force a trigger at any count explicitly.
 
-**Exposed function API** — a direct Python function the CLI calls, bypassing the stream. Same interface, same accumulation logic, same trigger conditions.
+**Function feeder** — direct in-process feeding for API use. Same accumulation logic, same trigger conditions.
 
-```python
-class HtmlFeeder(Protocol):
-    async def feed(self, url: str, html: str, job_id: str) -> None: ...
-    async def force(self, job_id: str) -> None: ...
+```go
+type FunctionFeeder struct { ... }
+func (f *FunctionFeeder) Feed(ctx context.Context, url, html, jobID string) error
+func (f *FunctionFeeder) Force(ctx context.Context, jobID string)
 
-class RedisStreamFeeder:
-    # consumes from a Redis stream
-    # triggers pipeline when page count >= min_pages or force() is called
-
-class FunctionFeeder:
-    # direct in-process feeding for CLI use
-    # same trigger logic as RedisStreamFeeder
+type RedisStreamFeeder struct { ... }
+func (f *RedisStreamFeeder) Start(ctx context.Context) error
+func (f *RedisStreamFeeder) Feed(ctx context.Context, url, html, jobID string) error
+func (f *RedisStreamFeeder) Force(ctx context.Context, jobID string)
 ```
 
 ---
@@ -305,11 +333,11 @@ s3://bucket/{job_id}/{page_index}.html
 
 Interface:
 
-```python
-class CorpusStore(Protocol):
-    async def put(self, job_id: str, index: int, url: str, html: str) -> None: ...
-    async def get_all(self, job_id: str) -> list[tuple[str, str]]: ...  # [(url, html)]
-    async def delete(self, job_id: str) -> None: ...
+```go
+type CorpusStore struct { ... }
+func (s *CorpusStore) Put(ctx context.Context, jobID string, index int, url, html string) error
+func (s *CorpusStore) GetAll(ctx context.Context, jobID string) ([][2]string, error)
+func (s *CorpusStore) Delete(ctx context.Context, jobID string) error
 ```
 
 **Parser manifests — MongoDB**
@@ -331,11 +359,12 @@ One document per manifest. Embeds job metadata alongside the parser output.
 
 Interface:
 
-```python
-class ParserStore(Protocol):
-    async def save(self, manifest: ParserManifest) -> None: ...
-    async def get(self, parser_id: str) -> ParserManifest | None: ...
-    async def update_status(self, parser_id: str, status: str, error: str | None) -> None: ...
+```go
+type ParserStore struct { ... }
+func (s *ParserStore) Save(ctx context.Context, doc *ManifestDoc) error
+func (s *ParserStore) Get(ctx context.Context, parserID string) (*ManifestDoc, error)
+func (s *ParserStore) UpdateStatus(ctx context.Context, parserID string, status JobStatus, errMsg *string) error
+func (s *ParserStore) UpdateResult(ctx context.Context, parserID string, result json.RawMessage) error
 ```
 
 ---
@@ -348,19 +377,8 @@ feed(url, html) × N
   min_pages hit or force()
        │
        ▼
-  job created → corpus fetched from S3 → Rust core invoked via PyO3
+  job created → corpus fetched from S3 → Rust core invoked via CGo FFI
        │
        ├── success → manifest saved to MongoDB → status: done
        └── failure → error saved to MongoDB   → status: failed
-```
-
----
-
-### Rust core boundary (PyO3)
-
-A single entry point exposed to Python. Takes a list of `(url, html)` pairs and a config dict, returns a manifest dict. All internal modules are unexposed.
-
-```rust
-#[pyfunction]
-fn run(pages: Vec<(String, String)>, config: Config) -> PyResult<ParserManifest>
 ```
