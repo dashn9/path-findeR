@@ -143,8 +143,6 @@ mod tests {
             make_node("p", ""),
         ]);
         let config = Config {
-            ai_endpoint: String::new(),
-            ai_model: String::new(),
             max_direct_kb: 300,
             top_n_nodes: 30,
             max_sentences: 3,
@@ -154,6 +152,7 @@ mod tests {
             output_format: crate::config::Format::Json,
             exclusions: vec![],
             min_pages: 2,
+            ai: Default::default(),
         };
         let tree = analyze(&page, &config);
         assert_eq!(tree.nodes.len(), 1);
@@ -166,8 +165,6 @@ mod tests {
             make_node("div", "Some text here for the div"),
         ]);
         let config = Config {
-            ai_endpoint: String::new(),
-            ai_model: String::new(),
             max_direct_kb: 300,
             top_n_nodes: 30,
             max_sentences: 3,
@@ -177,6 +174,7 @@ mod tests {
             output_format: crate::config::Format::Json,
             exclusions: vec![],
             min_pages: 2,
+            ai: Default::default(),
         };
         let tree = analyze(&page, &config);
         assert!(tree.nodes[0].tag == "h1");

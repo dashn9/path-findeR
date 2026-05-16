@@ -1,3 +1,5 @@
+// Package models holds the HTTP / Mongo DTOs. Pipeline + AI config moved to
+// internal/config; this package only describes what crosses the API boundary.
 package models
 
 import "time"
@@ -43,34 +45,4 @@ type StatusResponse struct {
 	JobID    string  `json:"job_id,omitempty"`
 	ParserID string  `json:"parser_id,omitempty"`
 	Error    *string `json:"error,omitempty"`
-}
-
-type PipelineConfig struct {
-	AIEndpoint         string   `json:"ai_endpoint"`
-	AIModel            string   `json:"ai_model"`
-	MaxDirectKB        int      `json:"max_direct_kb"`
-	TopNNodes          int      `json:"top_n_nodes"`
-	MaxSentences       int      `json:"max_sentences"`
-	MaxSentenceChars   int      `json:"max_sentence_chars"`
-	SimilarityThreshold float64 `json:"similarity_threshold"`
-	MaxRetries         int      `json:"max_retries"`
-	OutputFormat       string   `json:"output_format"`
-	Exclusions         []string `json:"exclusions"`
-	MinPages           int      `json:"min_pages"`
-}
-
-func DefaultConfig() PipelineConfig {
-	return PipelineConfig{
-		AIEndpoint:          "https://api.anthropic.com/v1/messages",
-		AIModel:             "claude-sonnet-4-20250514",
-		MaxDirectKB:         300,
-		TopNNodes:           30,
-		MaxSentences:        3,
-		MaxSentenceChars:    500,
-		SimilarityThreshold: 0.75,
-		MaxRetries:          3,
-		OutputFormat:        "json",
-		Exclusions:          []string{},
-		MinPages:            2,
-	}
 }

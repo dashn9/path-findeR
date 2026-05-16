@@ -1,7 +1,9 @@
 package core
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/../../../../path-finder-core/target/release -lpath_finder_core -lm -ldl -lpthread
+#cgo LDFLAGS: -L${SRCDIR}/../../../../target/release -lpath_finder_core
+#cgo linux LDFLAGS: -lm -ldl -lpthread
+#cgo darwin LDFLAGS: -lm -ldl -lpthread
 #cgo CFLAGS: -I${SRCDIR}/../../../../path-finder-core/include
 #include "path_finder_core.h"
 #include <stdlib.h>
@@ -12,38 +14,42 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/user/path-finder-service/internal/models"
+	"github.com/user/path-finder-service/internal/config"
 )
 
-// RunPipeline calls the Rust core via FFI.
-// pages is a list of [url, html] pairs. config is the pipeline configuration.
-// Returns the raw JSON manifest or an error.
-func RunPipeline(pages [][2]string, config models.PipelineConfig) (json.RawMessage, error) {
+// pipelinePayload is the JSON envelope sent over the FFI. Pipeline knobs are
+// embedded so they marshal flat; AI config nests under "ai".
+type pipelinePayload struct {
+	config.PipelineConfig
+	AI config.AIConfig `json:"ai"`
+}
+
+// RunPipeline calls the Rust core via FFI. Pipeline + AI configs marshal
+// straight from their config structs — no parallel DTOs.
+func RunPipeline(parserID string, pages [][2]string, pipeline config.PipelineConfig, ai config.AIConfig) (json.RawMessage, error) {
 	pagesJSON, err := json.Marshal(pages)
 	if err != nil {
 		return nil, fmt.Errorf("marshal pages: %w", err)
 	}
-
-	configJSON, err := json.Marshal(config)
+	configJSON, err := json.Marshal(pipelinePayload{PipelineConfig: pipeline, AI: ai})
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}
 
+	cParserID := C.CString(parserID)
+	defer C.free(unsafe.Pointer(cParserID))
 	cPages := C.CString(string(pagesJSON))
 	defer C.free(unsafe.Pointer(cPages))
-
 	cConfig := C.CString(string(configJSON))
 	defer C.free(unsafe.Pointer(cConfig))
 
-	result := C.pfr_run(cPages, cConfig)
+	result := C.pfr_run(cParserID, cPages, cConfig)
 	if result == nil {
-		errMsg := C.pfr_last_error()
-		if errMsg != nil {
-			return nil, fmt.Errorf("pipeline: %s", C.GoString(errMsg))
+		if msg := C.pfr_last_error(); msg != nil {
+			return nil, fmt.Errorf("pipeline: %s", C.GoString(msg))
 		}
 		return nil, fmt.Errorf("pipeline: unknown error")
 	}
 	defer C.pfr_free(result)
-
 	return json.RawMessage(C.GoString(result)), nil
 }

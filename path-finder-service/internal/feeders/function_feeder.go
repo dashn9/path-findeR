@@ -9,14 +9,14 @@ import (
 )
 
 type FunctionFeeder struct {
-	corpus   *storage.CorpusStore
+	corpus   storage.CorpusStore
 	runner   *jobs.JobRunner
 	minPages int
 	mu       sync.Mutex
 	counts   map[string]int
 }
 
-func NewFunctionFeeder(corpus *storage.CorpusStore, runner *jobs.JobRunner, minPages int) *FunctionFeeder {
+func NewFunctionFeeder(corpus storage.CorpusStore, runner *jobs.JobRunner, minPages int) *FunctionFeeder {
 	if minPages < 2 {
 		minPages = 2
 	}

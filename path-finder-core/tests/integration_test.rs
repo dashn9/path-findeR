@@ -11,8 +11,6 @@ use std::collections::HashMap;
 
 fn test_config() -> Config {
     Config {
-        ai_endpoint: String::new(),
-        ai_model: String::new(),
         max_direct_kb: 300,
         top_n_nodes: 30,
         max_sentences: 3,
@@ -22,6 +20,7 @@ fn test_config() -> Config {
         output_format: Format::Json,
         exclusions: vec![],
         min_pages: 2,
+        ai: Default::default(),
     }
 }
 

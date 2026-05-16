@@ -8,12 +8,13 @@ extern "C" {
 /**
  * Run the path-findeR pipeline.
  *
+ * @param parser_id   Identifier to assign to the produced manifest.
  * @param pages_json  JSON array of [url, html] pairs, e.g. [["http://...", "<html>..."], ...]
  * @param config_json JSON object with config fields (see Config struct)
  * @return            Heap-allocated JSON string with the manifest, or NULL on error.
  *                    Caller must free with pfr_free().
  */
-char* pfr_run(const char* pages_json, const char* config_json);
+char* pfr_run(const char* parser_id, const char* pages_json, const char* config_json);
 
 /**
  * Free a string returned by pfr_run.

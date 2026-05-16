@@ -21,23 +21,25 @@ HTML input  ->  URL pattern detection  ->  Parser  ->  Analyzer  ->  AiParserBui
 ## Architecture
 
 ```
-CLI (Rust)  --HTTP-->  Service (Go)  --CGo/FFI-->  Core (Rust)
-                           |
-                  +--------+--------+
-                  S3      Jobs     MongoDB
-                (corpus)  (state)  (manifests)
+CLI / Frontend  --HTTP-->  Service (Go)  --CGo/FFI-->  Core (Rust)
+                              |
+                     +--------+--------+
+                     S3      Jobs     MongoDB
+                   (corpus)  (state)  (manifests)
 ```
 
 | Component | Language | Role |
 |-----------|----------|------|
-| `path-finder-core` | Rust | All parsing, analysis, and selector logic (shared lib with C FFI) |
-| `path-finder-service` | Go | Chi HTTP API, job orchestration, S3 + MongoDB storage |
+| `path-finder-core` | Rust | Parsing, analysis, selector logic, LLM adapters (Anthropic / OpenAI / OpenRouter). Shared lib with C FFI |
+| `path-finder-service` | Go | Chi HTTP API, job orchestration, pluggable storage (S3 or local FS), MongoDB manifests |
 | `path-finder-cli` | Rust | Thin CLI client (clap) over the service API |
+| `frontend` | TypeScript (Next.js 16) | Web UI — Feed, History, Settings, Manifest with Inspector / Tester / Raw tabs |
 
 ## Requirements
 
 - Rust 2024 edition
-- Go 1.23+
+- Go 1.23+ with CGo enabled (requires a C toolchain on PATH — gcc / clang / MSVC)
+- Node.js 20+ (frontend)
 - MongoDB
 - AWS S3 (or S3-compatible storage)
 - Redis (optional, for stream-based feeding)
@@ -59,26 +61,44 @@ This builds `libpath_finder_core.so` (or `.dylib`/`.dll`) and the `path-finder` 
 cargo build --release
 
 cd path-finder-service
+go mod tidy   # first time only — generates go.sum
 go build -o path-finder-service ./cmd/server
 ```
 
-## Running the service
-
-Environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `S3_BUCKET` | `path-finder-corpus` | S3 bucket for HTML corpus |
-| `MONGO_URI` | `mongodb://localhost:27017` | MongoDB connection string |
-| `MONGO_DB` | `path_finder` | MongoDB database name |
-| `BIND_ADDR` | `0.0.0.0:8000` | Service listen address |
-| `AI_ENDPOINT` | `https://api.anthropic.com/v1/messages` | LLM endpoint URL |
-| `AI_MODEL` | `claude-sonnet-4-20250514` | LLM model |
-| `ANTHROPIC_API_KEY` | (none) | API key for the LLM |
+### Frontend
 
 ```bash
+cd frontend
+cp .env.example .env.local   # first time only
+npm install
+npm run dev                  # http://localhost:3000
+```
+
+The frontend talks directly to the Go service. Set the base URL via `NEXT_PUBLIC_PATH_FINDER_URL` in `.env.local`, or override at runtime from the `/settings` screen. Default is `http://localhost:8000`.
+
+## Running the service
+
+The service loads `.env` from its working directory on startup. Process-level
+env vars always override the file, so production deployments can ignore the
+file and set vars directly. Override the file path with `ENV_FILE=path/to/env`.
+
+```bash
+cp .env.example .env       # first time only
 ./path-finder-service
 ```
+
+Config is grouped by domain so credentials sit next to the thing they unlock —
+AWS keys live on `S3Config`, model + key live on the chosen LLM adapter, etc.
+See `.env.example` for the full set; the highlights:
+
+| Group | Vars | Description |
+|---|---|---|
+| Server | `BIND_ADDR` | Listen address (default `0.0.0.0:8000`) |
+| Storage | `STORAGE_ADAPTER`, `LOCAL_STORAGE_PATH` | `s3` (default) or `local`; local uses `./data/corpus` |
+| S3 | `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `S3_ENDPOINT_URL`, `S3_FORCE_PATH_STYLE` | Blank creds fall back to the AWS SDK chain; endpoint + path-style cover MinIO / R2 / etc. |
+| MongoDB | `MONGO_URI`, `MONGO_DB`, `MONGO_COLLECTION` | Manifest store |
+| LLM | `AI_ADAPTER` (`anthropic`\|`openai`\|`openrouter`), plus the chosen provider's `*_API_KEY`, `*_BASE_URL`, `*_MODEL` | Only the active adapter's block needs to be set |
+| Pipeline | `PIPELINE_*` knobs | Optional overrides; sensible defaults in code |
 
 ## CLI usage
 
@@ -193,12 +213,60 @@ cd path-finder-service
 go test ./...
 ```
 
+### Frontend
+
+```bash
+cd frontend
+npm run lint       # eslint
+npx tsc --noEmit   # type-check
+```
+
 ## HTML feeders
 
 Two implementations:
 
 - **FunctionFeeder** — direct in-process feeding, used by the API endpoints
 - **RedisStreamFeeder** — consumes `(url, html, job_id)` messages from a Redis stream; triggers the pipeline when page count reaches `min_pages` or `force()` is called
+
+## Frontend
+
+Next.js 16 (App Router) + React 19 + Tailwind v4 + `lucide-react`. Lives in `frontend/`.
+
+Routes:
+
+| Path | Screen |
+|------|--------|
+| `/feed` | Paste URL + HTML, watch the queue fill, optionally force-run |
+| `/history` | Table of recent parser manifests (status, host, label count, unresolved, created) |
+| `/parser/{id}` | Manifest detail with four tabs: **Manifest** (selector tree), **Inspector** (candidate scores, DOM context, cross-corpus validation grid, LLM rationale, activity log), **Test selectors** (run the manifest against pasted HTML in the browser), **Raw JSON** |
+| `/settings` | `PATH_FINDER_URL` field + read-only view of the pipeline config |
+
+Layout:
+
+```
+frontend/app/
+  layout.tsx                      Geist + JetBrains Mono fonts, StoreProvider, AppShell chrome
+  globals.css                     Tailwind v4 import + @theme tokens (warm-paper palette)
+  page.tsx                        redirect → /feed
+  feed/page.tsx
+  history/page.tsx
+  settings/page.tsx
+  parser/[id]/page.tsx
+  lib/
+    types.ts                      ParserDoc, LabelDef, ParserTrace, etc.
+    mockData.ts                   demo manifests + inspector traces
+    store.tsx                     React Context: parsers, queue, toasts, mock handlers
+    utils.ts                      cn(), fmtTime(), relTime()
+  components/
+    app-shell.tsx                 topbar + sidebar + toast region
+    feed-screen.tsx, history-screen.tsx, settings-screen.tsx, manifest-screen.tsx
+    ui/                           button, input, field, checkbox, badge, status-pill,
+                                  selector-chip, toast, modal, tabs, json-block, empty-state
+    inspector/                    run-inspector, dom-context, validation-grid, activity-log
+    manifest/                     label-group, selector-tester, regenerate-modal
+```
+
+The mock store under `lib/store.tsx` simulates the service responses (toasts, status transitions on `force` / `regenerate`). Replace it with a real fetcher against the Go API to go live.
 
 ## License
 

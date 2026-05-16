@@ -1,46 +1,103 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     Json,
     Toml,
 }
 
+/// Pipeline config — crosses the FFI as JSON. Mirror field changes in the Go
+/// `internal/core/bridge.go` payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
-    pub ai_endpoint: String,
-    pub ai_model: String,
-    #[serde(default = "default_max_direct_kb")]
     pub max_direct_kb: usize,
-    #[serde(default = "default_top_n_nodes")]
     pub top_n_nodes: usize,
-    #[serde(default = "default_max_sentences")]
     pub max_sentences: usize,
-    #[serde(default = "default_max_sentence_chars")]
     pub max_sentence_chars: usize,
-    #[serde(default = "default_similarity_threshold")]
     pub similarity_threshold: f32,
-    #[serde(default = "default_max_retries")]
     pub max_retries: usize,
-    #[serde(default = "default_output_format")]
     pub output_format: Format,
-    #[serde(default)]
     pub exclusions: Vec<String>,
-    #[serde(default = "default_min_pages")]
     pub min_pages: usize,
+    pub ai: AiConfig,
 }
 
-fn default_max_direct_kb() -> usize { 300 }
-fn default_top_n_nodes() -> usize { 30 }
-fn default_max_sentences() -> usize { 3 }
-fn default_max_sentence_chars() -> usize { 500 }
-fn default_similarity_threshold() -> f32 { 0.75 }
-fn default_max_retries() -> usize { 3 }
-fn default_output_format() -> Format { Format::Json }
-fn default_min_pages() -> usize { 2 }
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            max_direct_kb: 300, top_n_nodes: 30, max_sentences: 3, max_sentence_chars: 500,
+            similarity_threshold: 0.75, max_retries: 3, output_format: Format::Json,
+            exclusions: vec![], min_pages: 2, ai: AiConfig::default(),
+        }
+    }
+}
 
 impl Config {
-    pub fn effective_min_pages(&self) -> usize {
-        self.min_pages.max(2)
+    pub fn effective_min_pages(&self) -> usize { self.min_pages.max(2) }
+}
+
+/// `adapter` picks which nested struct the dispatcher reads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    pub adapter: String,
+    pub anthropic: AnthropicConfig,
+    pub openai: OpenAIConfig,
+    pub openrouter: OpenRouterConfig,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self { adapter: "anthropic".into(), anthropic: Default::default(), openai: Default::default(), openrouter: Default::default() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnthropicConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    pub version: String,
+}
+
+impl Default for AnthropicConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            base_url: "https://api.anthropic.com/v1".into(),
+            model: "claude-sonnet-4-20250514".into(),
+            version: "2023-06-01".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenAIConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+impl Default for OpenAIConfig {
+    fn default() -> Self {
+        Self { api_key: String::new(), base_url: "https://api.openai.com/v1".into(), model: "gpt-4o-mini".into() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenRouterConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+impl Default for OpenRouterConfig {
+    fn default() -> Self {
+        Self { api_key: String::new(), base_url: "https://openrouter.ai/api/v1".into(), model: "anthropic/claude-sonnet-4".into() }
     }
 }

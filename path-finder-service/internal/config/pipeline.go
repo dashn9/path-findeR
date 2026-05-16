@@ -1,0 +1,30 @@
+package config
+
+// PipelineConfig is the subset that crosses the FFI to the Rust core. It only
+// holds knobs the pipeline cares about — credentials and storage endpoints are
+// resolved on the Go side and never travel over FFI.
+type PipelineConfig struct {
+	MaxDirectKB         int      `json:"max_direct_kb"`
+	TopNNodes           int      `json:"top_n_nodes"`
+	MaxSentences        int      `json:"max_sentences"`
+	MaxSentenceChars    int      `json:"max_sentence_chars"`
+	SimilarityThreshold float64  `json:"similarity_threshold"`
+	MaxRetries          int      `json:"max_retries"`
+	OutputFormat        string   `json:"output_format"`
+	Exclusions          []string `json:"exclusions"`
+	MinPages            int      `json:"min_pages"`
+}
+
+func loadPipeline() PipelineConfig {
+	return PipelineConfig{
+		MaxDirectKB:         getenvInt("PIPELINE_MAX_DIRECT_KB", 300),
+		TopNNodes:           getenvInt("PIPELINE_TOP_N_NODES", 30),
+		MaxSentences:        getenvInt("PIPELINE_MAX_SENTENCES", 3),
+		MaxSentenceChars:    getenvInt("PIPELINE_MAX_SENTENCE_CHARS", 500),
+		SimilarityThreshold: getenvFloat("PIPELINE_SIMILARITY_THRESHOLD", 0.75),
+		MaxRetries:          getenvInt("PIPELINE_MAX_RETRIES", 3),
+		OutputFormat:        getenv("PIPELINE_OUTPUT_FORMAT", "json"),
+		Exclusions:          nil,
+		MinPages:            getenvInt("PIPELINE_MIN_PAGES", 2),
+	}
+}

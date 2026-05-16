@@ -126,11 +126,16 @@ fn sample_evenly<'a>(items: &[&'a str], count: usize) -> Vec<&'a str> {
 }
 
 fn truncate_at_word_boundary(s: &str, max_chars: usize) -> String {
-    if s.len() <= max_chars {
+    if s.chars().count() <= max_chars {
         return s.to_string();
     }
 
-    let truncated = &s[..max_chars];
+    let byte_end = s
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let truncated = &s[..byte_end];
     if let Some(last_space) = truncated.rfind(' ') {
         truncated[..last_space].to_string()
     } else {

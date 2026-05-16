@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod ai_parser_builder;
 pub mod analyzer;
 pub mod config;

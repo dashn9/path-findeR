@@ -1,9 +1,15 @@
-use serde_json::json;
+//! Bridge between the semantic-document layer and the AI provider.
+//!
+//! Formats the corpus into a single prompt, dispatches through `AiService`
+//! (which picks the configured provider), then parses the JSON the model
+//! returns. Selector derivation happens elsewhere — this module only collects
+//! `(label, gen_id)` pairs and similarity clusters.
 
+use crate::ai::AiService;
 use crate::config::Config;
 use crate::error::{PathFinderError, Result};
-use crate::semantic::{SemanticDocument, format_semantic_doc};
-use crate::types::{AiResponse, AiLabelResult, AiCluster};
+use crate::semantic::{format_semantic_doc, SemanticDocument};
+use crate::types::{AiCluster, AiLabelResult, AiResponse};
 
 const SYSTEM_PROMPT: &str = r#"You are a content structure analyzer. You receive HTML pages or semantic document representations and identify distinct content zones.
 
@@ -24,10 +30,7 @@ Respond in JSON format:
   "clusters": [{"gen_ids": ["n_abc", "n_def"], "similarity": 0.85}, ...]
 }"#;
 
-pub fn call_ai(
-    documents: &[SemanticDocument],
-    config: &Config,
-) -> Result<AiResponse> {
+pub fn call_ai(documents: &[SemanticDocument], config: &Config) -> Result<AiResponse> {
     let mut content = String::new();
     for (i, doc) in documents.iter().enumerate() {
         content.push_str(&format!("=== Page {} ===\n", i + 1));
@@ -35,52 +38,14 @@ pub fn call_ai(
         content.push('\n');
     }
 
-    let request_body = json!({
-        "model": config.ai_model,
-        "max_tokens": 4096,
-        "messages": [
-            {
-                "role": "user",
-                "content": content
-            }
-        ],
-        "system": SYSTEM_PROMPT
-    });
-
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .post(&config.ai_endpoint)
-        .header("Content-Type", "application/json")
-        .header("x-api-key", std::env::var("ANTHROPIC_API_KEY").unwrap_or_default())
-        .header("anthropic-version", "2023-06-01")
-        .json(&request_body)
-        .send()
-        .map_err(|e| PathFinderError::AiRequest(e.to_string()))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        return Err(PathFinderError::AiRequest(format!(
-            "HTTP {status}: {body}"
-        )));
-    }
-
-    let resp_json: serde_json::Value = response
-        .json()
-        .map_err(|e| PathFinderError::AiResponseParse(e.to_string()))?;
-
-    parse_ai_response(&resp_json)
+    let service = AiService::new(&config.ai);
+    let raw = service.complete(SYSTEM_PROMPT, &content)?;
+    parse_ai_text(&raw)
 }
 
-fn parse_ai_response(resp: &serde_json::Value) -> Result<AiResponse> {
-    // Extract text content from the AI response
-    let text = resp["content"]
-        .as_array()
-        .and_then(|arr| arr.iter().find(|b| b["type"] == "text"))
-        .and_then(|b| b["text"].as_str())
-        .ok_or_else(|| PathFinderError::AiResponseParse("no text in response".into()))?;
-
-    // Try to parse the JSON from the response text
+/// Pulls the JSON object out of the model's reply (which may be wrapped in
+/// ```json fences, free prose, or be raw JSON) and decodes it into `AiResponse`.
+pub(crate) fn parse_ai_text(text: &str) -> Result<AiResponse> {
     let json_str = extract_json(text)?;
     let parsed: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| PathFinderError::AiResponseParse(e.to_string()))?;
@@ -110,10 +75,7 @@ fn parse_ai_response(resp: &serde_json::Value) -> Result<AiResponse> {
                         .filter_map(|id| id.as_str().map(String::from))
                         .collect();
                     let similarity = v["similarity"].as_f64()? as f32;
-                    Some(AiCluster {
-                        gen_ids,
-                        similarity,
-                    })
+                    Some(AiCluster { gen_ids, similarity })
                 })
                 .collect()
         })
@@ -123,7 +85,6 @@ fn parse_ai_response(resp: &serde_json::Value) -> Result<AiResponse> {
 }
 
 fn extract_json(text: &str) -> Result<String> {
-    // Try to find JSON block in markdown code fence
     if let Some(start) = text.find("```json") {
         let after = &text[start + 7..];
         if let Some(end) = after.find("```") {
@@ -136,14 +97,11 @@ fn extract_json(text: &str) -> Result<String> {
             return Ok(after[..end].trim().to_string());
         }
     }
-
-    // Try to find raw JSON object
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             return Ok(text[start..=end].to_string());
         }
     }
-
     Err(PathFinderError::AiResponseParse(
         "no JSON found in AI response".into(),
     ))
@@ -154,36 +112,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_json_code_fence() {
-        let text = r#"Here is the result:
-```json
-{"labels": [], "clusters": []}
-```"#;
+    fn extract_code_fenced_json() {
+        let text = "Here:\n```json\n{\"labels\":[],\"clusters\":[]}\n```";
         let json = extract_json(text).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(parsed["labels"].is_array());
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v["labels"].is_array());
     }
 
     #[test]
-    fn test_extract_json_raw() {
-        let text = r#"{"labels": [{"label": "title", "gen_id": "n_1"}], "clusters": []}"#;
-        let json = extract_json(text).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["labels"][0]["label"], "title");
+    fn extract_raw_json() {
+        let text = r#"{"labels":[{"label":"title","gen_id":"n_1"}],"clusters":[]}"#;
+        let parsed = parse_ai_text(text).unwrap();
+        assert_eq!(parsed.labels.len(), 1);
+        assert_eq!(parsed.labels[0].label, "title");
     }
 
     #[test]
-    fn test_parse_ai_response() {
-        let resp = json!({
-            "content": [{
-                "type": "text",
-                "text": "{\"labels\": [{\"label\": \"title\", \"gen_id\": \"n_1\"}], \"clusters\": [{\"gen_ids\": [\"n_2\", \"n_3\"], \"similarity\": 0.9}]}"
-            }]
-        });
-        let result = parse_ai_response(&resp).unwrap();
-        assert_eq!(result.labels.len(), 1);
-        assert_eq!(result.labels[0].label, "title");
-        assert_eq!(result.clusters.len(), 1);
-        assert_eq!(result.clusters[0].similarity, 0.9);
+    fn parses_clusters_with_similarity() {
+        let text = r#"{
+            "labels": [{"label":"title","gen_id":"n_1"}],
+            "clusters": [{"gen_ids":["n_2","n_3"], "similarity": 0.9}]
+        }"#;
+        let parsed = parse_ai_text(text).unwrap();
+        assert_eq!(parsed.clusters.len(), 1);
+        assert_eq!(parsed.clusters[0].similarity, 0.9);
     }
 }

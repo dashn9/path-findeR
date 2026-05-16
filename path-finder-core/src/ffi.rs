@@ -1,11 +1,12 @@
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
-use crate::config::{Config, Format};
+use crate::config::Config;
 use crate::pipeline::run_pipeline;
 
 /// Run the pipeline from C/Go.
 ///
+/// `parser_id` is the identifier to assign to the resulting manifest.
 /// `pages_json` is a JSON array of `[url, html]` pairs.
 /// `config_json` is a JSON object matching the Config struct.
 ///
@@ -13,10 +14,15 @@ use crate::pipeline::run_pipeline;
 /// or null on error (error message retrievable via `pfr_last_error`).
 #[unsafe(no_mangle)]
 pub extern "C" fn pfr_run(
+    parser_id: *const c_char,
     pages_json: *const c_char,
     config_json: *const c_char,
 ) -> *mut c_char {
     let result = std::panic::catch_unwind(|| {
+        let parser_id_str = unsafe { CStr::from_ptr(parser_id) }
+            .to_str()
+            .map_err(|e| format!("invalid parser_id UTF-8: {e}"))?
+            .to_string();
         let pages_str = unsafe { CStr::from_ptr(pages_json) }
             .to_str()
             .map_err(|e| format!("invalid pages UTF-8: {e}"))?;
@@ -30,7 +36,7 @@ pub extern "C" fn pfr_run(
         let config: Config = serde_json::from_str(config_str)
             .map_err(|e| format!("config JSON parse error: {e}"))?;
 
-        let manifest = run_pipeline(pages_raw, &config)
+        let manifest = run_pipeline(pages_raw, parser_id_str, &config)
             .map_err(|e| format!("pipeline error: {e}"))?;
 
         let output = serde_json::to_string(&manifest)

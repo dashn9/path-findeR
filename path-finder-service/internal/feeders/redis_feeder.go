@@ -16,7 +16,7 @@ type RedisStreamFeeder struct {
 	streamKey    string
 	groupName    string
 	consumerName string
-	corpus       *storage.CorpusStore
+	corpus       storage.CorpusStore
 	runner       *jobs.JobRunner
 	minPages     int
 	mu           sync.Mutex
@@ -25,7 +25,7 @@ type RedisStreamFeeder struct {
 
 func NewRedisStreamFeeder(
 	redisURL, streamKey, groupName, consumerName string,
-	corpus *storage.CorpusStore,
+	corpus storage.CorpusStore,
 	runner *jobs.JobRunner,
 	minPages int,
 ) (*RedisStreamFeeder, error) {
