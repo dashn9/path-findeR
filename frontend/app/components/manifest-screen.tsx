@@ -94,7 +94,9 @@ export function ManifestScreen({ parser }: { parser: ParserDoc }) {
         {tab === "test" && <SelectorTester parser={parser} />}
       </div>
 
+      {/* Remount per open so the modal's lazy-init state picks fresh defaults. */}
       <RegenerateModal
+        key={regenOpen ? `${parser._id}-open` : "closed"}
         open={regenOpen}
         parser={parser}
         onClose={() => setRegenOpen(false)}

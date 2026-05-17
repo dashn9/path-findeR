@@ -49,7 +49,7 @@ export function FeedScreen() {
       </header>
 
       <div className="grid gap-5 max-[1100px]:grid-cols-1 [@media(min-width:1100px)]:grid-cols-2">
-        <section className="grid gap-3.5 border border-rule p-[18px]">
+        <section className="grid gap-3.5 border border-rule p-4.5">
           <form onSubmit={handleSubmit} className="grid gap-3.5">
             <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
               <Field
@@ -112,7 +112,7 @@ export function FeedScreen() {
           </form>
         </section>
 
-        <section className="grid gap-3.5 border border-rule p-[18px]">
+        <section className="grid gap-3.5 border border-rule p-4.5">
           <header className="flex items-center justify-between">
             <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">
               Queue · job_id {jobId || "—"}
@@ -175,7 +175,7 @@ export function FeedScreen() {
 
       <section className="pt-3">
         <div className="font-mono text-[11px] uppercase tracking-wider text-ink-3">Pipeline</div>
-        <div className="mt-2 flex flex-wrap items-center gap-2.5 border border-rule bg-paper-surface px-[18px] py-3.5 font-mono text-xs text-ink-1">
+        <div className="mt-2 flex flex-wrap items-center gap-2.5 border border-rule bg-paper-surface px-4.5 py-3.5 font-mono text-xs text-ink-1">
           <span>URL pattern</span>
           <ArrowRight size={12} className="text-ink-2" />
           <span>HTML parse</span>

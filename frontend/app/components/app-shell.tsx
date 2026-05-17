@@ -21,7 +21,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <TopBar activeJobId={activeJobId} />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
-        <main className="flex-1 min-w-0 max-w-[1280px] px-12 pt-8 pb-24">{children}</main>
+        <main className="flex-1 min-w-0 max-w-320 px-12 pt-8 pb-24">{children}</main>
       </div>
 
       <div className="fixed bottom-6 right-6 z-40 grid gap-2 w-[min(360px,calc(100vw-48px))]">
@@ -51,7 +51,7 @@ function TopBar({ activeJobId }: { activeJobId: string | null }) {
         {activeJobId && (
           <Link
             href={`/parser/${activeJobId}`}
-            className="inline-flex items-center gap-1.5 rounded-[2px] border border-rule bg-paper-elevated px-2.5 py-1 text-xs text-ink-2 no-underline transition-colors hover:border-rule-strong"
+            className="inline-flex items-center gap-1.5 rounded-xs border border-rule bg-paper-elevated px-2.5 py-1 text-xs text-ink-2 no-underline transition-colors hover:border-rule-strong"
           >
             <Terminal size={12} />
             <span className="font-mono">job_id:&nbsp;</span>
@@ -67,7 +67,7 @@ function TopBar({ activeJobId }: { activeJobId: string | null }) {
         </span>
         <Link
           href="/settings"
-          className="grid h-7 w-7 place-items-center rounded-[2px] text-ink-2 transition-colors hover:bg-paper-sunken hover:text-ink-1"
+          className="grid h-7 w-7 place-items-center rounded-xs text-ink-2 transition-colors hover:bg-paper-sunken hover:text-ink-1"
           aria-label="Settings"
         >
           <Settings size={16} />
@@ -99,9 +99,9 @@ function Sidebar() {
             key={href}
             href={href}
             className={cn(
-              "flex items-center gap-2.5 rounded-[2px] px-2.5 py-1.5 text-[13px] no-underline transition-colors duration-100",
+              "flex items-center gap-2.5 rounded-xs px-2.5 py-1.5 text-[13px] no-underline transition-colors duration-100",
               active
-                ? "border border-rule bg-paper-elevated text-ink-1 px-[9px] py-1.5"
+                ? "border border-rule bg-paper-elevated text-ink-1 px-2.25 py-1.5"
                 : "text-ink-2 hover:bg-paper-sunken hover:text-ink-1",
             )}
           >
@@ -114,7 +114,7 @@ function Sidebar() {
         <div className="px-2 pb-2 font-mono text-[10px] uppercase tracking-wider text-ink-3">Endpoint</div>
         <div className="flex gap-2 overflow-hidden border border-rule bg-paper-elevated px-2.5 py-2 font-mono text-[11px] text-ink-2">
           <span className="font-bold text-accent">GET</span>
-          <span>http://localhost:8000</span>
+          <span>http://localhost:7117</span>
         </div>
       </div>
       <div className="mt-auto border-t border-rule px-2 pt-2 font-mono text-[10px] text-ink-3">

@@ -47,8 +47,8 @@ export function StatusPill({
     }
   }
   const tone = toneByStatus[s];
-  const cellWidth = compact ? "w-3.5" : "w-[18px]";
-  const namePad = compact ? "px-2 py-[3px] text-[10.5px]" : "px-2.5 py-1 text-[11px]";
+  const cellWidth = compact ? "w-3.5" : "w-4.5";
+  const namePad = compact ? "px-2 py-0.75 text-[10.5px]" : "px-2.5 py-1 text-[11px]";
 
   return (
     <span
@@ -75,8 +75,8 @@ export function StatusPill({
                 className={cn(
                   "block",
                   isFail
-                    ? "h-[7px] w-[7px] bg-danger"
-                    : "h-[5px] w-[5px] " +
+                    ? "h-1.75 w-1.75 bg-danger"
+                    : "h-1.25 w-1.25 " +
                         (isOn ? "bg-ink-1" : isCur ? "bg-warning pulse-dot" : "bg-rule"),
                 )}
               />

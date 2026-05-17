@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import { EmptyState } from "../ui/empty-state";
 import { Badge } from "../ui/badge";
@@ -8,21 +8,23 @@ import { DomContext } from "./dom-context";
 import { ValidationGrid } from "./validation-grid";
 import { ActivityLog } from "./activity-log";
 import { MOCK_TRACES } from "../../lib/mockData";
-import type { ParserDoc } from "../../lib/types";
+import type { ParserDoc, ParserTrace } from "../../lib/types";
 import { cn } from "../../lib/utils";
 
 export function RunInspector({ parser }: { parser: ParserDoc }) {
   const trace = MOCK_TRACES[parser._id];
   const allLabels = parser.parser ? Object.keys(parser.parser) : [];
-  const [activeLabel, setActiveLabel] = useState<string | null>(allLabels[0] ?? null);
-  const [activeCand, setActiveCand] = useState(0);
+  const initialLabel = allLabels[0] ?? null;
+  const [activeLabel, setActiveLabel] = useState<string | null>(initialLabel);
+  const [activeCand, setActiveCand] = useState(() => chosenIndex(trace, initialLabel));
   const [pageIdx, setPageIdx] = useState(0);
 
-  useEffect(() => {
-    if (!trace || !activeLabel) return;
-    const lab = trace.labels[activeLabel];
-    if (lab) setActiveCand(lab.chosen >= 0 ? lab.chosen : 0);
-  }, [activeLabel, trace]);
+  // Reset candidate index in the same event that switches labels — avoids the
+  // set-state-in-effect anti-pattern.
+  const selectLabel = (l: string) => {
+    setActiveLabel(l);
+    setActiveCand(chosenIndex(trace, l));
+  };
 
   if (!trace) {
     return (
@@ -48,7 +50,7 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
             <button
               key={l}
               type="button"
-              onClick={() => setActiveLabel(l)}
+              onClick={() => selectLabel(l)}
               className={cn(
                 "inline-flex items-center gap-1.5 border-r border-rule px-2.5 py-1 text-xs transition-colors",
                 idx === 0 && "border-l ml-1.5",
@@ -64,8 +66,8 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
 
       <header
         className={cn(
-          "grid grid-cols-[1fr_auto] items-center gap-6 border border-rule bg-paper-elevated px-5 py-[18px]",
-          lab.unresolved && "border-l-[3px] border-l-warning pl-[19px]",
+          "grid grid-cols-[1fr_auto] items-center gap-6 border border-rule bg-paper-elevated px-5 py-4.5",
+          lab.unresolved && "border-l-3 border-l-warning pl-4.75",
         )}
       >
         <div>
@@ -93,11 +95,11 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
             chosen selector{lab.chosen < 0 ? " · none" : ""}
           </div>
           {lab.chosen >= 0 ? (
-            <code className="max-w-[520px] overflow-x-auto whitespace-nowrap bg-highlight px-2.5 py-0.5 font-mono text-[13px] leading-normal text-ink-1">
+            <code className="max-w-130 overflow-x-auto whitespace-nowrap bg-highlight px-2.5 py-0.5 font-mono text-[13px] leading-normal text-ink-1">
               {lab.candidates[lab.chosen].css}
             </code>
           ) : (
-            <code className="max-w-[520px] overflow-x-auto whitespace-nowrap bg-danger-soft px-2.5 py-0.5 font-mono text-[13px] leading-normal text-danger">
+            <code className="max-w-130 overflow-x-auto whitespace-nowrap bg-danger-soft px-2.5 py-0.5 font-mono text-[13px] leading-normal text-danger">
               — validation failed across the corpus
             </code>
           )}
@@ -126,7 +128,7 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
                     className={cn(
                       "grid w-full grid-cols-[auto_auto_1fr] items-center gap-3 border bg-paper-elevated px-3 py-2.5 text-left transition-colors",
                       active && "border-ink-1",
-                      chosen && "border-l-[3px] border-l-ink-1 pl-[9px]",
+                      chosen && "border-l-3 border-l-ink-1 pl-2.25",
                       chosen && active && "bg-accent-soft",
                       !active && "hover:border-rule-strong",
                       !active && !chosen && "border-rule",
@@ -140,7 +142,7 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
                     >
                       {chosen ? "★" : String(i + 1).padStart(2, "0")}
                     </span>
-                    <div className="grid w-[88px] gap-1">
+                    <div className="grid w-22 gap-1">
                       <div className="font-mono text-[13px] font-medium leading-none text-ink-1">
                         {c.score.toFixed(2)}
                       </div>
@@ -250,7 +252,7 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
               <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">LLM rationale</span>
               <span className="font-mono text-ink-3">gpt-4o-mini</span>
             </header>
-            <blockquote className="m-0 border border-rule border-l-[3px] border-l-ink-1 bg-paper-elevated px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-ink-1">
+            <blockquote className="m-0 border border-rule border-l-3 border-l-ink-1 bg-paper-elevated px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-ink-1">
               {lab.rationale}
             </blockquote>
           </div>
@@ -260,4 +262,10 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
       <ActivityLog rows={trace.activity} />
     </div>
   );
+}
+
+function chosenIndex(trace: ParserTrace | undefined, label: string | null): number {
+  if (!trace || !label) return 0;
+  const lab = trace.labels[label];
+  return lab && lab.chosen >= 0 ? lab.chosen : 0;
 }

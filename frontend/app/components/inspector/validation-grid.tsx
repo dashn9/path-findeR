@@ -45,7 +45,7 @@ export function ValidationGrid({
                 key={pi}
                 title={`${pages[pi].short} · ${v ? "matched" : "no match"}`}
                 className={cn(
-                  "h-[18px] border",
+                  "h-4.5 border",
                   v ? "border-success/60 bg-success" : "miss-hatched border-rule-strong bg-paper",
                 )}
               />

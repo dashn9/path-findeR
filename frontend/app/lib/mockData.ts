@@ -117,7 +117,7 @@ export const MOCK_CONFIG: PipelineConfig = {
   min_pages: 2,
 };
 
-export const PATH_FINDER_URL_DEFAULT = "http://localhost:8000";
+export const PATH_FINDER_URL_DEFAULT = "http://localhost:7117";
 
 export const MOCK_TRACES: Record<string, ParserTrace> = {
   a3f9c1: {

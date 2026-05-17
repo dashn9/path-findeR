@@ -117,7 +117,6 @@ pub fn is_excluded(node: &ParsedNode, custom_exclusions: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn make_node(tag: &str, attrs: &[(&str, &str)]) -> ParsedNode {
         ParsedNode {

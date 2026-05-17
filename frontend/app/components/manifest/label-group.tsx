@@ -8,8 +8,8 @@ export function LabelGroup({ name, def }: { name: string; def: LabelDef }) {
   return (
     <section
       className={cn(
-        "grid gap-3 border border-rule bg-paper-surface px-[18px] py-4",
-        def.unresolved && "border-l-[3px] border-l-warning pl-4",
+        "grid gap-3 border border-rule bg-paper-surface px-4.5 py-4",
+        def.unresolved && "border-l-3 border-l-warning pl-4",
       )}
     >
       <header className="flex items-start justify-between gap-4">

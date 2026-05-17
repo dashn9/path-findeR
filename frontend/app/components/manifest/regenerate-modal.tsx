@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -20,16 +20,15 @@ export function RegenerateModal({
   onConfirm: (opts: { labels: string[]; force: boolean }) => void;
 }) {
   const allLabels = parser?.parser ? Object.keys(parser.parser) : [];
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Lazy init: pre-select unresolved labels on first mount. The parent re-mounts
+  // this component (via `key`) each time the modal is opened so state resets
+  // without needing an effect.
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const p = parser?.parser;
+    if (!p) return new Set();
+    return new Set(allLabels.filter((l) => p[l].unresolved));
+  });
   const [force, setForce] = useState(false);
-
-  useEffect(() => {
-    if (open && parser?.parser) {
-      const p = parser.parser;
-      setSelected(new Set(allLabels.filter((l) => p[l].unresolved)));
-      setForce(false);
-    }
-  }, [open, parser]);
 
   const toggle = (label: string) => {
     const next = new Set(selected);

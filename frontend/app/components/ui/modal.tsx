@@ -36,7 +36,7 @@ export function Modal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-[min(560px,calc(100vw-48px))] max-h-[calc(100vh-96px)] overflow-auto border border-rule bg-paper-elevated rounded-[4px] shadow-2xl"
+        className="w-[min(560px,calc(100vw-48px))] max-h-[calc(100vh-96px)] overflow-auto border border-rule bg-paper-elevated rounded-sm shadow-2xl"
       >
         <header className="flex items-center justify-between border-b border-rule px-4 py-3">
           <div className="text-[15px] font-medium text-ink-1">{title}</div>

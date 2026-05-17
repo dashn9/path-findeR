@@ -10,7 +10,7 @@ struct Cli {
     command: Command,
 
     /// Service base URL
-    #[arg(long, env = "PATH_FINDER_URL", default_value = "http://localhost:8000")]
+    #[arg(long, env = "PATH_FINDER_URL", default_value = "http://localhost:7117")]
     url: String,
 }
 

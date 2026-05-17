@@ -36,7 +36,7 @@ export function Toast({
     <div
       role="status"
       className={cn(
-        "grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-[2px] border border-rule border-l-[3px] bg-paper-elevated p-3 shadow-lg toast-in",
+        "grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xs border border-rule border-l-3 bg-paper-elevated p-3 shadow-lg toast-in",
         kindBorder[kind],
       )}
     >

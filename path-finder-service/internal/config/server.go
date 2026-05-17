@@ -6,6 +6,6 @@ type ServerConfig struct {
 
 func loadServer() ServerConfig {
 	return ServerConfig{
-		BindAddr: getenv("BIND_ADDR", "0.0.0.0:8000"),
+		BindAddr: getenv("BIND_ADDR", "0.0.0.0:7117"),
 	}
 }
