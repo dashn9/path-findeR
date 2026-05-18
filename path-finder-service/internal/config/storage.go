@@ -12,7 +12,7 @@ type LocalStorageConfig struct{ BasePath string }
 
 func loadStorage() StorageConfig {
 	return StorageConfig{Adapter: StorageAdapter(pickAdapter(
-		"STORAGE_ADAPTER", string(StorageAdapterS3),
+		"STORAGE_ADAPTER", string(StorageAdapterLocal),
 		string(StorageAdapterS3), string(StorageAdapterLocal),
 	))}
 }

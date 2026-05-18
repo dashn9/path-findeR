@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,6 +38,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer mongoClient.Disconnect(ctx)
+	if err := mongoClient.Ping(ctx, nil); err != nil {
+		slog.Error("mongo ping", "uri", cfg.Mongo.URI, "err", err)
+		os.Exit(1)
+	}
 	parserStore := storage.NewParserStore(mongoClient.Database(cfg.Mongo.DB).Collection(cfg.Mongo.Collection))
 
 	runner := jobs.NewJobRunner(corpus, parserStore, cfg.Pipeline, cfg.AI)
@@ -106,6 +111,10 @@ func buildCorpusStore(ctx context.Context, cfg config.Config) (storage.CorpusSto
 			"bucket", cfg.S3.Bucket,
 			"region", cfg.S3.Region,
 			"endpoint", cfg.S3.EndpointURL)
-		return storage.NewS3CorpusStore(s3.NewFromConfig(awsCfg, s3Opts), cfg.S3.Bucket), nil
+		client := s3.NewFromConfig(awsCfg, s3Opts)
+		if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &cfg.S3.Bucket}); err != nil {
+			return nil, fmt.Errorf("s3 bucket %q unreachable: %w", cfg.S3.Bucket, err)
+		}
+		return storage.NewS3CorpusStore(client, cfg.S3.Bucket), nil
 	}
 }

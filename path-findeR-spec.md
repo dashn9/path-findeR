@@ -17,7 +17,7 @@ A minimum of 2 pages is required. path-findeR compares their source URLs to dete
 ```
 HTML input  →  URL pattern detection  →  Parser  →  Analyzer  →  AiParserBuilder  →  Selector builder  →  Manifest
                        |                                               ↑                   |
-                  (gate: min 2)                                        └─── validator ──────┘
+                  (gate: min 2)                                        └─── validator ─────┘
 ```
 
 ---
@@ -301,21 +301,12 @@ func RunPipeline(pages [][2]string, config PipelineConfig) (json.RawMessage, err
 
 ### HTML feeder
 
-An interface for feeding `(url, html)` pairs into the system. Two implementations:
-
-**Redis stream** — consumes messages off a Redis stream. Each message is a single `(url, html)` pair. Pages accumulate per stream group until the min page count is hit, at which point a pipeline run is triggered automatically. The caller can also force a trigger at any count explicitly.
-
-**Function feeder** — direct in-process feeding for API use. Same accumulation logic, same trigger conditions.
+Direct in-process feeding of `(url, html)` pairs. Pages accumulate per job ID until the min page count is hit, at which point a pipeline run is triggered automatically. The caller can also force a trigger at any count explicitly.
 
 ```go
 type FunctionFeeder struct { ... }
 func (f *FunctionFeeder) Feed(ctx context.Context, url, html, jobID string) error
 func (f *FunctionFeeder) Force(ctx context.Context, jobID string)
-
-type RedisStreamFeeder struct { ... }
-func (f *RedisStreamFeeder) Start(ctx context.Context) error
-func (f *RedisStreamFeeder) Feed(ctx context.Context, url, html, jobID string) error
-func (f *RedisStreamFeeder) Force(ctx context.Context, jobID string)
 ```
 
 ---

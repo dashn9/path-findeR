@@ -1,10 +1,10 @@
 package core
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/../../../../target/release -lpath_finder_core
+#cgo LDFLAGS: -L${SRCDIR}/../../../target/release -lpath_finder_core
 #cgo linux LDFLAGS: -lm -ldl -lpthread
 #cgo darwin LDFLAGS: -lm -ldl -lpthread
-#cgo CFLAGS: -I${SRCDIR}/../../../../path-finder-core/include
+#cgo CFLAGS: -I${SRCDIR}/../../../path-finder-core/include
 #include "path_finder_core.h"
 #include <stdlib.h>
 */
