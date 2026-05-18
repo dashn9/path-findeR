@@ -10,20 +10,22 @@ export interface LabelDef {
 
 export interface ParserDoc {
   _id: string;
-  job_id: string;
+  hostname: string;
+  shape: string[];
   status: ParserStatus;
   stage?: number;
   fail_stage?: number;
   created_at: string;
+  last_triggered_at: string | null;
   completed_at: string | null;
   error: string | null;
   url_pattern: { host: string; pattern: string };
-  pages_seen: number;
+  page_count: number;
   parser: Record<string, LabelDef> | null;
 }
 
 export interface FeedQueueItem {
-  job_id: string;
+  bucket_id: string;
   url: string;
   html: string;
   at: string;

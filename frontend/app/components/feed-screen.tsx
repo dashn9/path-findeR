@@ -15,26 +15,23 @@ import { relTime } from "../lib/utils";
 export function FeedScreen() {
   const router = useRouter();
   const { feedQueue, parsers, feedPage, forceRun } = useStore();
-  const [jobId, setJobId] = useState("");
+  const [parserId, setParserId] = useState("");
   const [url, setUrl] = useState("");
   const [html, setHtml] = useState("");
   const [forceOnSubmit, setForceOnSubmit] = useState(false);
 
-  const genJobId = () => setJobId(Math.random().toString(16).slice(2, 8));
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!url || !html) return;
-    const id = jobId || Math.random().toString(16).slice(2, 8);
-    setJobId(id);
-    feedPage({ job_id: id, url, html });
+    const assignedID = feedPage({ url, html });
+    setParserId(assignedID);
     setUrl("");
     setHtml("");
-    if (forceOnSubmit) forceRun(id);
+    if (forceOnSubmit) forceRun(assignedID);
   };
 
-  const pages = feedQueue.filter((p) => p.job_id === jobId);
-  const job = parsers.find((p) => p._id === jobId);
+  const pages = feedQueue.filter((p) => p.bucket_id === parserId);
+  const parser = parsers.find((p) => p._id === parserId);
 
   return (
     <div className="grid gap-6">
@@ -51,34 +48,17 @@ export function FeedScreen() {
       <div className="grid gap-5 max-[1100px]:grid-cols-1 [@media(min-width:1100px)]:grid-cols-2">
         <section className="grid gap-3.5 border border-rule p-4.5">
           <form onSubmit={handleSubmit} className="grid gap-3.5">
-            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-              <Field
-                label="job_id"
-                hint={
-                  <>
-                    Reuse an existing id, or{" "}
-                    <button
-                      type="button"
-                      className="bg-transparent p-0 text-accent underline underline-offset-2"
-                      onClick={genJobId}
-                    >
-                      generate one
-                    </button>
-                    .
-                  </>
-                }
-              >
-                <Input mono value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="a3f9c1" />
-              </Field>
-              <Field label="url">
-                <Input
-                  mono
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://shop.example.com/products/87423"
-                />
-              </Field>
-            </div>
+            <Field
+              label="url"
+              hint="Server derives the bucket from the URL's hostname + path tokens + page shape."
+            >
+              <Input
+                mono
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://shop.example.com/products/87423"
+              />
+            </Field>
             <Field label="html" hint="Raw HTML up to max_direct_kb (300kb). Larger payloads are streamed.">
               <Textarea
                 mono
@@ -115,16 +95,16 @@ export function FeedScreen() {
         <section className="grid gap-3.5 border border-rule p-4.5">
           <header className="flex items-center justify-between">
             <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">
-              Queue · job_id {jobId || "—"}
+              Queue · parser_id {parserId || "—"}
             </span>
-            {job && <StatusPill status={job.status} stage={job.stage} failStage={job.fail_stage} compact />}
+            {parser && <StatusPill status={parser.status} stage={parser.stage} failStage={parser.fail_stage} compact />}
           </header>
 
           {pages.length === 0 ? (
             <div className="border border-dashed border-rule-strong bg-paper-surface px-4 py-6 text-center">
               <div className="font-mono text-ink-3">no pages yet</div>
               <div className="text-xs text-ink-2">
-                Feed at least {MOCK_CONFIG.min_pages} pages to start a job.
+                Feed at least {MOCK_CONFIG.min_pages} pages to start a run.
               </div>
             </div>
           ) : (
@@ -155,15 +135,15 @@ export function FeedScreen() {
               {pages.length >= MOCK_CONFIG.min_pages ? "ready to run" : "minimum not reached"}
             </div>
             <div className="ml-auto flex items-center gap-2">
-              <Button size="sm" disabled={!jobId} onClick={() => forceRun(jobId)} icon={<Play />}>
+              <Button size="sm" disabled={!parserId} onClick={() => forceRun(parserId)} icon={<Play />}>
                 Force run
               </Button>
-              {job && job.status === "done" && (
+              {parser && parser.status === "done" && (
                 <Button
                   size="sm"
                   variant="primary"
                   icon={<ArrowRight />}
-                  onClick={() => router.push(`/parser/${jobId}`)}
+                  onClick={() => router.push(`/parser/${encodeURIComponent(parserId)}`)}
                 >
                   Open manifest
                 </Button>
@@ -176,7 +156,9 @@ export function FeedScreen() {
       <section className="pt-3">
         <div className="font-mono text-[11px] uppercase tracking-wider text-ink-3">Pipeline</div>
         <div className="mt-2 flex flex-wrap items-center gap-2.5 border border-rule bg-paper-surface px-4.5 py-3.5 font-mono text-xs text-ink-1">
-          <span>URL pattern</span>
+          <span>shape + URL tokens</span>
+          <ArrowRight size={12} className="text-ink-2" />
+          <span>bucket route</span>
           <ArrowRight size={12} className="text-ink-2" />
           <span>HTML parse</span>
           <ArrowRight size={12} className="text-ink-2" />

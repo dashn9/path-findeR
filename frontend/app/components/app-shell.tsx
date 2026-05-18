@@ -11,17 +11,17 @@ import { cn } from "../lib/utils";
 export function AppShell({ children }: { children: ReactNode }) {
   const { toasts, dismissToast, parsers } = useStore();
   const pathname = usePathname();
-  const parserId = pathname.match(/^\/parser\/([^/?#]+)/)?.[1];
-  const activeJobId = parserId
-    ? parsers.find((p) => p._id === decodeURIComponent(parserId))?._id ?? decodeURIComponent(parserId)
+  const routeId = pathname.match(/^\/parser\/([^/?#]+)/)?.[1];
+  const activeParserId = routeId
+    ? parsers.find((p) => p._id === decodeURIComponent(routeId))?._id ?? decodeURIComponent(routeId)
     : null;
 
   return (
     <div className="flex min-h-full flex-col">
-      <TopBar activeJobId={activeJobId} />
+      <TopBar activeParserId={activeParserId} />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
-        <main className="flex-1 min-w-0 max-w-320 px-12 pt-8 pb-24">{children}</main>
+        <main className="flex-1 min-w-0 max-w-7xl px-12 pt-8 pb-24">{children}</main>
       </div>
 
       <div className="fixed bottom-6 right-6 z-40 grid gap-2 w-[min(360px,calc(100vw-48px))]">
@@ -39,7 +39,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function TopBar({ activeJobId }: { activeJobId: string | null }) {
+function TopBar({ activeParserId }: { activeParserId: string | null }) {
   return (
     <header className="sticky top-0 z-10 grid h-13 grid-cols-[240px_1fr_auto] items-center border-b border-rule bg-paper px-6">
       <Link href="/feed" className="inline-flex items-baseline font-mono text-base font-bold no-underline">
@@ -48,14 +48,14 @@ function TopBar({ activeJobId }: { activeJobId: string | null }) {
       </Link>
 
       <div className="flex justify-start">
-        {activeJobId && (
+        {activeParserId && (
           <Link
-            href={`/parser/${activeJobId}`}
+            href={`/parser/${encodeURIComponent(activeParserId)}`}
             className="inline-flex items-center gap-1.5 rounded-xs border border-rule bg-paper-elevated px-2.5 py-1 text-xs text-ink-2 no-underline transition-colors hover:border-rule-strong"
           >
             <Terminal size={12} />
-            <span className="font-mono">job_id:&nbsp;</span>
-            <span className="font-mono font-medium text-ink-1">{activeJobId}</span>
+            <span className="font-mono">parser_id:&nbsp;</span>
+            <span className="font-mono font-medium text-ink-1">{activeParserId}</span>
           </Link>
         )}
       </div>

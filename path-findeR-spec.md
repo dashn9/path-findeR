@@ -270,15 +270,23 @@ CLI (Rust)  ──HTTP──→  Service (Go)  ──CGo/FFI──→  Rust core
 
 ### Rust core boundary (C FFI)
 
-A single entry point exposed via `extern "C"`. Takes JSON strings for pages and config, returns a heap-allocated JSON string with the manifest. The caller must free the returned string. All internal modules are unexposed.
+Three entry points exposed via `extern "C"`. All take JSON strings and return either a heap-allocated JSON string (caller must free) or a scalar.
 
 ```c
 // path_finder_core.h
 
 // Run the pipeline. Returns heap-allocated JSON manifest, or NULL on error.
-char* pfr_run(const char* pages_json, const char* config_json);
+char* pfr_run(const char* parser_id, const char* pages_json, const char* config_json);
 
-// Free a string returned by pfr_run.
+// Compute a page's structural shape: {"paths": [...], "id": "a1b2c3d4"}.
+// Used by the Go feeder to bucket pages by template before pfr_run.
+char* pfr_shape(const char* html);
+
+// Jaccard similarity between two shape path-sets (JSON arrays of strings).
+// Returns [0.0, 1.0] or a negative value on error.
+double pfr_shape_jaccard(const char* a_json, const char* b_json);
+
+// Free a string returned by pfr_run or pfr_shape.
 void pfr_free(char* ptr);
 
 // Get the last error message (thread-local). NULL if no error.
@@ -301,46 +309,80 @@ func RunPipeline(pages [][2]string, config PipelineConfig) (json.RawMessage, err
 
 ### HTML feeder
 
-Direct in-process feeding of `(url, html)` pairs. Pages accumulate per job ID until the min page count is hit, at which point a pipeline run is triggered automatically. The caller can also force a trigger at any count explicitly.
+Direct in-process feeding of `(url, html)` pairs. No caller-supplied id — the server groups pages itself.
+
+**Routing.** For each page the feeder produces two signals:
+
+- **URL tokens** — the hostname (lowercased, `www.` stripped, port dropped) plus the path segments. Each segment is classified `static` (kept) or `dynamic` (`*`) by a simple heuristic: 3+ consecutive digits or 8+ hex chars → dynamic. `/users/123` becomes `["users", "*"]`; `/products/cheese-wheel` becomes `["products", "cheese-wheel"]`.
+- **Shape** — produced by the Rust core's `pfr_shape`:
+  - `paths`: depth-capped (≤ 8) root-to-node tag paths. Tag names only.
+  - `marks`: stable identifiers from element attributes — `#id` values, `role=...`, `aria-*=...`, and "stable-looking" classes (CSS-in-JS / framework hashes filtered out).
+  - `id`: 8-char FNV-1a digest of the path set; tail of the bucket id.
+
+**Bucketing.** Candidate buckets for the page are existing buckets with the same hostname whose stored `url_tokens` exactly match the incoming tokens (any static-position disagreement disqualifies — `/users/123` and `/products/123` can never share a bucket regardless of structural similarity). Each surviving candidate is scored against every captured reference page via combined Jaccard:
+
+```
+score = 0.7 * J(new.paths, ref.paths) + 0.3 * J(new.marks, ref.marks)
+```
+
+The new page joins the bucket with the highest max-over-refs score if that score ≥ `PIPELINE_SHAPE_SIMILARITY_THRESHOLD` (default `0.75`). Otherwise a new bucket is created with id `<hostname>:<shape-id>`.
+
+**Forming → stable.** New buckets start `forming`. While forming, every incoming page contributes its shape to `shape_refs` (capped, default 3 entries). Once `page_count` ≥ promotion threshold the bucket flips to `stable` and the captured refs are trusted as the template signature. This prevents a single anomalous first page (cookie banner, A/B variant, error state) from poisoning later matches.
+
+**Trigger.** Pages accumulate per bucket until `PIPELINE_MIN_PAGES` is reached, at which point the runner is asked to derive a parser. The runner is rate-limited by three guards:
+
+1. **In-flight dedup** — concurrent triggers for the same bucket collapse to one run.
+2. **Cooldown** — `PIPELINE_RERUN_COOLDOWN_SECONDS` (default 60s) must elapse since the previous run started.
+3. **New-pages guard** — at least one page must have been written to the bucket since the last successful run. (Regenerate requests bypass this; the caller is explicit.)
 
 ```go
 type FunctionFeeder struct { ... }
-func (f *FunctionFeeder) Feed(ctx context.Context, url, html, jobID string) error
-func (f *FunctionFeeder) Force(ctx context.Context, jobID string)
+func (f *FunctionFeeder) Feed(ctx context.Context, url, html string) (parserID string, err error)
+func (f *FunctionFeeder) Force(ctx context.Context, parserID string)
 ```
 
 ---
 
 ### Storage
 
-**HTML corpus — AWS S3**
+**HTML corpus — AWS S3 (or local fs)**
 
-One object per page, stored under a `job_id` prefix. The source URL is stored as object metadata so it can be retrieved alongside the HTML without a separate index.
+One object per page, stored under a `<host>/<shape-id>/` prefix (the bucket ID with its `:` expanded into a path separator so the layout stays Windows-safe on the local adapter). The source URL is stored as object metadata so it can be retrieved alongside the HTML without a separate index.
 
 ```
-s3://bucket/{job_id}/{page_index}.html
+s3://bucket/shop.example.com/a3f9c1de/0.html
   metadata: { "url": "https://shop.example.com/products/123" }
 ```
 
 Interface:
 
 ```go
-type CorpusStore struct { ... }
-func (s *CorpusStore) Put(ctx context.Context, jobID string, index int, url, html string) error
-func (s *CorpusStore) GetAll(ctx context.Context, jobID string) ([][2]string, error)
-func (s *CorpusStore) Delete(ctx context.Context, jobID string) error
+type CorpusStore interface {
+    Put(ctx context.Context, bucketID string, index int, url, html string) error
+    GetAll(ctx context.Context, bucketID string) ([]Page, error)
+    HasPagesNewerThan(ctx context.Context, bucketID string, t time.Time) (bool, error)
+    Delete(ctx context.Context, bucketID string) error
+}
 ```
 
 **Parser manifests — MongoDB**
 
-One document per manifest. Embeds job metadata alongside the parser output.
+One document per bucket. The bucket ID is the document `_id`, which is also the externally-visible parser ID.
 
 ```json
 {
-  "_id": "a3f9c1",
-  "job_id": "a3f9c1",
+  "_id": "shop.example.com:a3f9c1de",
+  "hostname": "shop.example.com",
+  "url_tokens": ["products", "*"],
+  "url_seg_count": 2,
+  "state": "stable",
+  "shape_refs": [
+    { "paths": ["html", "html>body", "..."], "marks": ["#main", ".product-card"] }
+  ],
   "status": "done",
+  "page_count": 12,
   "created_at": "...",
+  "last_triggered_at": "...",
   "completed_at": "...",
   "error": null,
   "url_pattern": { "host": "shop.example.com", "pattern": "/products/{}" },
@@ -354,6 +396,11 @@ Interface:
 type ParserStore struct { ... }
 func (s *ParserStore) Save(ctx context.Context, doc *ManifestDoc) error
 func (s *ParserStore) Get(ctx context.Context, parserID string) (*ManifestDoc, error)
+func (s *ParserStore) FindByHostname(ctx context.Context, hostname string) ([]ManifestDoc, error)
+func (s *ParserStore) IncrementPageCount(ctx context.Context, parserID string) (int, error)
+func (s *ParserStore) PushShapeRef(ctx context.Context, parserID string, ref ShapeRef, maxRefs int) error
+func (s *ParserStore) PromoteToStable(ctx context.Context, parserID string) error
+func (s *ParserStore) SetLastTriggered(ctx context.Context, parserID string, t time.Time) error
 func (s *ParserStore) UpdateStatus(ctx context.Context, parserID string, status JobStatus, errMsg *string) error
 func (s *ParserStore) UpdateResult(ctx context.Context, parserID string, result json.RawMessage) error
 ```
@@ -365,11 +412,15 @@ func (s *ParserStore) UpdateResult(ctx context.Context, parserID string, result 
 ```
 feed(url, html) × N
        │
-  min_pages hit or force()
+  shape computed (Rust) → bucket matched or created (host:shape-id)
+       │
+  page_count >= min_pages or force(bucket_id)
+       │
+  cooldown elapsed AND new pages since last run
        │
        ▼
-  job created → corpus fetched from S3 → Rust core invoked via CGo FFI
+  corpus fetched from S3/local → Rust core invoked via CGo FFI
        │
-       ├── success → manifest saved to MongoDB → status: done
-       └── failure → error saved to MongoDB   → status: failed
+       ├── success → manifest updated in MongoDB → status: done
+       └── failure → error saved to MongoDB     → status: failed
 ```

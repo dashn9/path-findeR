@@ -13,10 +13,12 @@ import (
 	"time"
 )
 
-// LocalCorpusStore persists pages to a local directory. Layout mirrors S3:
+// LocalCorpusStore persists pages to a local directory. Layout mirrors S3,
+// with the bucket ID's colon expanded into a directory split so paths stay
+// Windows-safe:
 //
-//	<base>/<job_id>/<index>.html        raw HTML
-//	<base>/<job_id>/<index>.url         source URL (one line, UTF-8)
+//	<base>/<host>/<shape>/<index>.html        raw HTML
+//	<base>/<host>/<shape>/<index>.url         source URL (one line, UTF-8)
 //
 // The url sidecar replaces S3 object metadata. mtime on the html file is the
 // authoritative "page was written at" timestamp.
@@ -34,8 +36,13 @@ func NewLocalCorpusStore(base string) (*LocalCorpusStore, error) {
 	return &LocalCorpusStore{base: base}, nil
 }
 
-func (s *LocalCorpusStore) Put(ctx context.Context, jobID string, index int, url, html string) error {
-	dir := filepath.Join(s.base, jobID)
+// bucketDir resolves a bucket ID ("host:shape") to its on-disk directory.
+func (s *LocalCorpusStore) bucketDir(bucketID string) string {
+	return filepath.Join(s.base, filepath.FromSlash(strings.ReplaceAll(bucketID, ":", "/")))
+}
+
+func (s *LocalCorpusStore) Put(ctx context.Context, bucketID string, index int, url, html string) error {
+	dir := s.bucketDir(bucketID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -48,8 +55,8 @@ func (s *LocalCorpusStore) Put(ctx context.Context, jobID string, index int, url
 	return writeAtomic(urlPath, []byte(url))
 }
 
-func (s *LocalCorpusStore) GetAll(ctx context.Context, jobID string) ([]Page, error) {
-	dir := filepath.Join(s.base, jobID)
+func (s *LocalCorpusStore) GetAll(ctx context.Context, bucketID string) ([]Page, error) {
+	dir := s.bucketDir(bucketID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -90,8 +97,8 @@ func (s *LocalCorpusStore) GetAll(ctx context.Context, jobID string) ([]Page, er
 	return pages, nil
 }
 
-func (s *LocalCorpusStore) HasPagesNewerThan(ctx context.Context, jobID string, t time.Time) (bool, error) {
-	dir := filepath.Join(s.base, jobID)
+func (s *LocalCorpusStore) HasPagesNewerThan(ctx context.Context, bucketID string, t time.Time) (bool, error) {
+	dir := s.bucketDir(bucketID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -114,8 +121,8 @@ func (s *LocalCorpusStore) HasPagesNewerThan(ctx context.Context, jobID string, 
 	return false, nil
 }
 
-func (s *LocalCorpusStore) Delete(ctx context.Context, jobID string) error {
-	dir := filepath.Join(s.base, jobID)
+func (s *LocalCorpusStore) Delete(ctx context.Context, bucketID string) error {
+	dir := s.bucketDir(bucketID)
 	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", dir, err)
 	}

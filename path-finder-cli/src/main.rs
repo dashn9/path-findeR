@@ -16,29 +16,27 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Feed an HTML page into the pipeline
+    /// Feed an HTML page into the pipeline. The server routes it to the right
+    /// (hostname, template) bucket and returns the bucket id.
     Feed {
         /// Source URL of the page
         source_url: String,
         /// Path to HTML file
         html_file: PathBuf,
-        /// Job ID to group pages under
-        #[arg(long)]
-        job_id: String,
     },
-    /// Force-trigger pipeline for a job
+    /// Force-trigger a pipeline run for a known bucket.
     Force {
-        /// Job ID to force-trigger
-        job_id: String,
+        /// Bucket id (e.g. "shop.example.com:a1b2c3d4")
+        bucket_id: String,
     },
-    /// Retrieve a parser manifest
+    /// Retrieve a parser manifest. The parser id is the bucket id.
     Get {
-        /// Parser ID to retrieve
+        /// Parser id to retrieve
         parser_id: String,
     },
     /// Request regeneration of a broken parser
     Regenerate {
-        /// Parser ID to regenerate
+        /// Parser id to regenerate
         parser_id: String,
         /// Specific labels to regenerate
         #[arg(short, long)]
@@ -47,9 +45,9 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
-    /// Check the status of a parser job
+    /// Check the status of a parser
     Status {
-        /// Parser ID to check
+        /// Parser id to check
         parser_id: String,
     },
 }
@@ -63,9 +61,8 @@ async fn main() {
         Command::Feed {
             source_url,
             html_file,
-            job_id,
-        } => cmd_feed(&client, &cli.url, &source_url, &html_file, &job_id).await,
-        Command::Force { job_id } => cmd_force(&client, &cli.url, &job_id).await,
+        } => cmd_feed(&client, &cli.url, &source_url, &html_file).await,
+        Command::Force { bucket_id } => cmd_force(&client, &cli.url, &bucket_id).await,
         Command::Get { parser_id } => cmd_get(&client, &cli.url, &parser_id).await,
         Command::Regenerate {
             parser_id,
@@ -86,37 +83,38 @@ async fn cmd_feed(
     base: &str,
     source_url: &str,
     html_file: &PathBuf,
-    job_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let html = std::fs::read_to_string(html_file)?;
-    client
+    let resp: serde_json::Value = client
         .post(format!("{base}/feed"))
         .json(&serde_json::json!({
             "url": source_url,
             "html": html,
-            "job_id": job_id,
         }))
         .send()
         .await?
-        .error_for_status()?;
+        .error_for_status()?
+        .json()
+        .await?;
 
-    println!("{} Fed page for job {job_id}", "ok".green());
+    let bucket_id = resp["bucket_id"].as_str().unwrap_or("?");
+    println!("{} Fed page into bucket {bucket_id}", "ok".green());
     Ok(())
 }
 
 async fn cmd_force(
     client: &reqwest::Client,
     base: &str,
-    job_id: &str,
+    bucket_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     client
         .post(format!("{base}/force"))
-        .json(&serde_json::json!({"job_id": job_id}))
+        .json(&serde_json::json!({"bucket_id": bucket_id}))
         .send()
         .await?
         .error_for_status()?;
 
-    println!("{} Triggered pipeline for job {job_id}", "ok".green());
+    println!("{} Triggered pipeline for bucket {bucket_id}", "ok".green());
     Ok(())
 }
 
@@ -191,7 +189,14 @@ async fn cmd_status(
 
     println!("{:>12}: {parser_id}", "Parser".bold());
     println!("{:>12}: {}", "Status".bold(), data["status"].as_str().unwrap_or("-"));
+    println!("{:>12}: {}", "Hostname".bold(), data["hostname"].as_str().unwrap_or("-"));
+    println!("{:>12}: {}", "Pages".bold(), data["page_count"].as_i64().unwrap_or(0));
     println!("{:>12}: {}", "Created".bold(), data["created_at"].as_str().unwrap_or("-"));
+    println!(
+        "{:>12}: {}",
+        "Triggered".bold(),
+        data["last_triggered_at"].as_str().unwrap_or("-")
+    );
     println!(
         "{:>12}: {}",
         "Completed".bold(),
@@ -204,7 +209,6 @@ async fn cmd_status(
     );
 
     if let Some(pat) = data.get("url_pattern") {
-        println!("{:>12}: {}", "Host".bold(), pat["host"].as_str().unwrap_or("-"));
         println!("{:>12}: {}", "Pattern".bold(), pat["pattern"].as_str().unwrap_or("-"));
     }
 

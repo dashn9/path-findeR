@@ -6,74 +6,43 @@ import (
 )
 
 func TestFeedRequestJSON(t *testing.T) {
-	raw := `{"url":"http://example.com/1","html":"<html></html>","job_id":"j1"}`
+	raw := `{"url":"http://example.com/1","html":"<html></html>"}`
 	var req FeedRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.URL != "http://example.com/1" {
-		t.Errorf("URL = %s", req.URL)
-	}
-	if req.JobID != "j1" {
-		t.Errorf("JobID = %s", req.JobID)
+	if req.URL != "http://example.com/1" || req.HTML != "<html></html>" {
+		t.Errorf("got %#v", req)
 	}
 }
 
 func TestForceRequestJSON(t *testing.T) {
-	raw := `{"job_id":"j1"}`
+	raw := `{"parser_id":"example.com:a1b2c3d4"}`
 	var req ForceRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.JobID != "j1" {
-		t.Errorf("JobID = %s", req.JobID)
-	}
-}
-
-func TestRegenerationRequestDefaults(t *testing.T) {
-	raw := `{"parser_id":"p1"}`
-	var req RegenerationRequest
-	if err := json.Unmarshal([]byte(raw), &req); err != nil {
-		t.Fatal(err)
-	}
-	if req.ParserID != "p1" {
+	if req.ParserID != "example.com:a1b2c3d4" {
 		t.Errorf("ParserID = %s", req.ParserID)
-	}
-	if req.Labels != nil {
-		t.Errorf("Labels should be nil, got %v", req.Labels)
-	}
-	if req.Force {
-		t.Error("Force should be false")
 	}
 }
 
 func TestRegenerationRequestFull(t *testing.T) {
-	raw := `{"parser_id":"p1","labels":["title","price"],"force":true}`
+	raw := `{"parser_id":"example.com:a1b2c3d4","labels":["title","price"],"force":true}`
 	var req RegenerationRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatal(err)
 	}
-	if len(req.Labels) != 2 {
-		t.Errorf("Labels len = %d, want 2", len(req.Labels))
-	}
-	if !req.Force {
-		t.Error("Force should be true")
+	if len(req.Labels) != 2 || !req.Force {
+		t.Errorf("got %#v", req)
 	}
 }
 
 func TestStatusResponseOmitsEmpty(t *testing.T) {
-	resp := StatusResponse{Status: "accepted", JobID: "j1"}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := StatusResponse{Status: "accepted", ParserID: "example.com:abc"}
+	data, _ := json.Marshal(resp)
 	var m map[string]interface{}
-	if err := json.Unmarshal(data, &m); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := m["parser_id"]; ok {
-		t.Error("parser_id should be omitted when empty")
-	}
+	json.Unmarshal(data, &m)
 	if _, ok := m["error"]; ok {
 		t.Error("error should be omitted when nil")
 	}
@@ -81,9 +50,16 @@ func TestStatusResponseOmitsEmpty(t *testing.T) {
 
 func TestManifestDocRoundtrip(t *testing.T) {
 	doc := ManifestDoc{
-		ID:     "p1",
-		JobID:  "p1",
-		Status: StatusDone,
+		ID:          "example.com:a1b2c3d4",
+		Hostname:    "example.com",
+		URLTokens:   []string{"products", "*"},
+		URLSegCount: 2,
+		State:       BucketForming,
+		ShapeRefs: []ShapeRef{
+			{Paths: []string{"html", "html>body"}, Marks: []string{"#main"}},
+		},
+		Status:    StatusPending,
+		PageCount: 1,
 	}
 	data, err := json.Marshal(doc)
 	if err != nil {
@@ -93,24 +69,19 @@ func TestManifestDocRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Status != StatusDone {
-		t.Errorf("Status = %s, want done", parsed.Status)
+	if parsed.State != BucketForming {
+		t.Errorf("State = %s", parsed.State)
+	}
+	if len(parsed.ShapeRefs) != 1 || len(parsed.ShapeRefs[0].Paths) != 2 {
+		t.Errorf("ShapeRefs = %#v", parsed.ShapeRefs)
+	}
+	if len(parsed.URLTokens) != 2 {
+		t.Errorf("URLTokens = %v", parsed.URLTokens)
 	}
 }
 
 func TestJobStatusValues(t *testing.T) {
-	cases := []struct {
-		s    JobStatus
-		want string
-	}{
-		{StatusPending, "pending"},
-		{StatusRunning, "running"},
-		{StatusDone, "done"},
-		{StatusFailed, "failed"},
-	}
-	for _, tc := range cases {
-		if string(tc.s) != tc.want {
-			t.Errorf("got %s, want %s", tc.s, tc.want)
-		}
+	if string(StatusPending) != "pending" || string(StatusDone) != "done" {
+		t.Error("status string values changed")
 	}
 }

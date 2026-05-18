@@ -13,18 +13,26 @@ type PipelineConfig struct {
 	OutputFormat        string   `json:"output_format"`
 	Exclusions          []string `json:"exclusions"`
 	MinPages            int      `json:"min_pages"`
+	// ShapeSimilarityThreshold gates which existing bucket a freshly fed page
+	// joins. Stays Go-side (not forwarded to the Rust core).
+	ShapeSimilarityThreshold float64 `json:"-"`
+	// RerunCooldownSeconds is the minimum delay between consecutive pipeline
+	// runs for the same bucket. Stays Go-side.
+	RerunCooldownSeconds int `json:"-"`
 }
 
 func loadPipeline() PipelineConfig {
 	return PipelineConfig{
-		MaxDirectKB:         getenvInt("PIPELINE_MAX_DIRECT_KB", 300),
-		TopNNodes:           getenvInt("PIPELINE_TOP_N_NODES", 30),
-		MaxSentences:        getenvInt("PIPELINE_MAX_SENTENCES", 3),
-		MaxSentenceChars:    getenvInt("PIPELINE_MAX_SENTENCE_CHARS", 500),
-		SimilarityThreshold: getenvFloat("PIPELINE_SIMILARITY_THRESHOLD", 0.75),
-		MaxRetries:          getenvInt("PIPELINE_MAX_RETRIES", 3),
-		OutputFormat:        getenv("PIPELINE_OUTPUT_FORMAT", "json"),
-		Exclusions:          nil,
-		MinPages:            getenvInt("PIPELINE_MIN_PAGES", 2),
+		MaxDirectKB:              getenvInt("PIPELINE_MAX_DIRECT_KB", 300),
+		TopNNodes:                getenvInt("PIPELINE_TOP_N_NODES", 30),
+		MaxSentences:             getenvInt("PIPELINE_MAX_SENTENCES", 3),
+		MaxSentenceChars:         getenvInt("PIPELINE_MAX_SENTENCE_CHARS", 500),
+		SimilarityThreshold:      getenvFloat("PIPELINE_SIMILARITY_THRESHOLD", 0.75),
+		MaxRetries:               getenvInt("PIPELINE_MAX_RETRIES", 3),
+		OutputFormat:             getenv("PIPELINE_OUTPUT_FORMAT", "json"),
+		Exclusions:               nil,
+		MinPages:                 getenvInt("PIPELINE_MIN_PAGES", 2),
+		ShapeSimilarityThreshold: getenvFloat("PIPELINE_SHAPE_SIMILARITY_THRESHOLD", 0.75),
+		RerunCooldownSeconds:     getenvInt("PIPELINE_RERUN_COOLDOWN_SECONDS", 60),
 	}
 }

@@ -2,14 +2,16 @@ import type { ParserDoc, PipelineConfig, ParserTrace } from "./types";
 
 export const MOCK_PARSERS: ParserDoc[] = [
   {
-    _id: "a3f9c1",
-    job_id: "a3f9c1",
+    _id: "shop.example.com:a3f9c1de",
+    hostname: "shop.example.com",
+    shape: ["html", "html>body", "html>body>main>article>h1"],
     status: "done",
     created_at: "2026-05-15T14:02:11Z",
+    last_triggered_at: "2026-05-15T14:02:11Z",
     completed_at: "2026-05-15T14:02:48Z",
     error: null,
     url_pattern: { host: "shop.example.com", pattern: "/products/{}" },
-    pages_seen: 6,
+    page_count: 6,
     parser: {
       title: {
         selectors: [
@@ -62,26 +64,30 @@ export const MOCK_PARSERS: ParserDoc[] = [
     },
   },
   {
-    _id: "7c1e22",
-    job_id: "7c1e22",
+    _id: "blog.example.org:7c1e2299",
+    hostname: "blog.example.org",
+    shape: ["html", "html>body>main>article"],
     status: "running",
     stage: 2,
     created_at: "2026-05-15T15:11:03Z",
+    last_triggered_at: "2026-05-15T15:11:03Z",
     completed_at: null,
     error: null,
     url_pattern: { host: "blog.example.org", pattern: "/posts/{}" },
-    pages_seen: 4,
+    page_count: 4,
     parser: null,
   },
   {
-    _id: "b80f4d",
-    job_id: "b80f4d",
+    _id: "news.example.io:b80f4d11",
+    hostname: "news.example.io",
+    shape: ["html", "html>body>article>header>h1"],
     status: "done",
     created_at: "2026-05-14T09:34:00Z",
+    last_triggered_at: "2026-05-14T09:34:00Z",
     completed_at: "2026-05-14T09:34:32Z",
     error: null,
     url_pattern: { host: "news.example.io", pattern: "/article/{}" },
-    pages_seen: 5,
+    page_count: 5,
     parser: {
       headline: { selectors: [{ css: "article header h1" }], concrete_types: ["Text"], abstract_types: ["Headline"], array: false, unresolved: false },
       byline: { selectors: [{ css: ".byline .author" }], concrete_types: ["Text"], abstract_types: ["Author"], array: false, unresolved: false },
@@ -90,15 +96,17 @@ export const MOCK_PARSERS: ParserDoc[] = [
     },
   },
   {
-    _id: "4d2a91",
-    job_id: "4d2a91",
+    _id: "docs.example.dev:4d2a9170",
+    hostname: "docs.example.dev",
+    shape: ["html", "html>body>main"],
     status: "failed",
     fail_stage: 1,
     created_at: "2026-05-13T17:20:10Z",
+    last_triggered_at: "2026-05-13T17:20:10Z",
     completed_at: "2026-05-13T17:20:14Z",
     error: "minimum pages not reached after timeout",
     url_pattern: { host: "docs.example.dev", pattern: "/guide/{}" },
-    pages_seen: 1,
+    page_count: 1,
     parser: null,
   },
 ];
@@ -120,7 +128,7 @@ export const MOCK_CONFIG: PipelineConfig = {
 export const PATH_FINDER_URL_DEFAULT = "http://localhost:7117";
 
 export const MOCK_TRACES: Record<string, ParserTrace> = {
-  a3f9c1: {
+  "shop.example.com:a3f9c1de": {
     activity: [
       { t: "14:02:11.402", kind: "feed/accepted", payload: "url=…/87423  size=12.4kb" },
       { t: "14:02:11.798", kind: "feed/accepted", payload: "url=…/19022  size=11.2kb" },
@@ -140,7 +148,7 @@ export const MOCK_TRACES: Record<string, ParserTrace> = {
       { t: "14:02:16.304", kind: "validate/match", payload: "label=description     ok=5/6" },
       { t: "14:02:16.328", kind: "validate/miss", payload: "label=sku             ok=3/6  unresolved" },
       { t: "14:02:16.351", kind: "validate/miss", payload: "label=in_stock        ok=2/6  unresolved" },
-      { t: "14:02:16.612", kind: "emit/manifest", payload: "parser_id=a3f9c1  bytes=2,108" },
+      { t: "14:02:16.612", kind: "emit/manifest", payload: "parser_id=shop.example.com:a3f9c1de  bytes=2,108" },
       { t: "14:02:16.788", kind: "done", payload: "duration=5.39s  unresolved=2" },
     ],
     pages: [

@@ -45,7 +45,13 @@ func main() {
 	parserStore := storage.NewParserStore(mongoClient.Database(cfg.Mongo.DB).Collection(cfg.Mongo.Collection))
 
 	runner := jobs.NewJobRunner(corpus, parserStore, cfg.Pipeline, cfg.AI)
-	feeder := feeders.NewFunctionFeeder(corpus, runner, cfg.Pipeline.MinPages)
+	feeder := feeders.NewFunctionFeeder(
+		corpus,
+		parserStore,
+		runner,
+		cfg.Pipeline.MinPages,
+		cfg.Pipeline.ShapeSimilarityThreshold,
+	)
 
 	h := &handlers.Handlers{
 		Feeder:      feeder,

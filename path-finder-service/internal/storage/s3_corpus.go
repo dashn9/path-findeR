@@ -23,8 +23,8 @@ func NewS3CorpusStore(client *s3.Client, bucket string) *S3CorpusStore {
 	return &S3CorpusStore{client: client, bucket: bucket}
 }
 
-func (s *S3CorpusStore) Put(ctx context.Context, jobID string, index int, url, html string) error {
-	key := jobKey(jobID, index)
+func (s *S3CorpusStore) Put(ctx context.Context, bucketID string, index int, url, html string) error {
+	key := pageKey(bucketID, index)
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &s.bucket,
 		Key:         &key,
@@ -36,12 +36,11 @@ func (s *S3CorpusStore) Put(ctx context.Context, jobID string, index int, url, h
 }
 
 // GetAll fetches every page in a single pass: one ListObjects + one GetObject
-// per key. The previous impl issued a HeadObject before each GetObject just to
-// read the url metadata — GetObject returns Metadata on the response, so the
-// head call was pure overhead. Object order is restored from the numeric
+// per key. GetObject returns Metadata on the response, so a separate
+// HeadObject is unnecessary. Object order is restored from the numeric
 // filename so callers see pages in feed order, not S3's lexicographic listing.
-func (s *S3CorpusStore) GetAll(ctx context.Context, jobID string) ([]Page, error) {
-	prefix := jobID + "/"
+func (s *S3CorpusStore) GetAll(ctx context.Context, bucketID string) ([]Page, error) {
+	prefix := bucketPrefix(bucketID)
 	keys, err := s.listKeys(ctx, prefix)
 	if err != nil {
 		return nil, err
@@ -79,8 +78,8 @@ func (s *S3CorpusStore) GetAll(ctx context.Context, jobID string) ([]Page, error
 	return pages, nil
 }
 
-func (s *S3CorpusStore) HasPagesNewerThan(ctx context.Context, jobID string, t time.Time) (bool, error) {
-	prefix := jobID + "/"
+func (s *S3CorpusStore) HasPagesNewerThan(ctx context.Context, bucketID string, t time.Time) (bool, error) {
+	prefix := bucketPrefix(bucketID)
 	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: &s.bucket,
 		Prefix: &prefix,
@@ -96,8 +95,8 @@ func (s *S3CorpusStore) HasPagesNewerThan(ctx context.Context, jobID string, t t
 	return false, nil
 }
 
-func (s *S3CorpusStore) Delete(ctx context.Context, jobID string) error {
-	prefix := jobID + "/"
+func (s *S3CorpusStore) Delete(ctx context.Context, bucketID string) error {
+	prefix := bucketPrefix(bucketID)
 	keys, err := s.listKeys(ctx, prefix)
 	if err != nil {
 		return err
@@ -136,8 +135,13 @@ func (s *S3CorpusStore) listKeys(ctx context.Context, prefix string) ([]string, 
 	return keys, nil
 }
 
-func jobKey(jobID string, index int) string {
-	return fmt.Sprintf("%s/%d.html", jobID, index)
+// bucketPrefix turns "host:shape" into the S3 prefix "host/shape/".
+func bucketPrefix(bucketID string) string {
+	return strings.ReplaceAll(bucketID, ":", "/") + "/"
+}
+
+func pageKey(bucketID string, index int) string {
+	return fmt.Sprintf("%s%d.html", bucketPrefix(bucketID), index)
 }
 
 func parseIndex(key, prefix string) int {

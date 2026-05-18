@@ -17,7 +17,28 @@ extern "C" {
 char* pfr_run(const char* parser_id, const char* pages_json, const char* config_json);
 
 /**
- * Free a string returned by pfr_run.
+ * Compute the structural shape of an HTML page. Returns a heap-allocated
+ * JSON object: {"paths": [...], "marks": [...], "id": "a1b2c3d4"}.
+ *
+ *   paths:  depth-capped root-to-node tag paths.
+ *   marks:  stable identifiers (#id, role=, aria-*=, stable classes).
+ *   id:     8-char FNV-1a of the path set; tail of the bucket ID.
+ *
+ * Caller must free with pfr_free(). Returns NULL on error.
+ */
+char* pfr_shape(const char* html);
+
+/**
+ * Jaccard similarity between two shape path sets. Inputs are JSON arrays of
+ * strings (the "paths" field of a pfr_shape result).
+ *
+ * @return  Score in [0.0, 1.0], or a negative value on error
+ *          (check pfr_last_error).
+ */
+double pfr_shape_jaccard(const char* a_json, const char* b_json);
+
+/**
+ * Free a string returned by pfr_run or pfr_shape.
  */
 void pfr_free(char* ptr);
 

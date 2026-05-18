@@ -6,6 +6,7 @@ pub mod error;
 pub mod exclusions;
 pub mod ffi;
 pub mod parser;
+pub mod shape;
 pub mod pipeline;
 pub mod selector_builder;
 pub mod semantic;

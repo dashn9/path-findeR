@@ -30,14 +30,15 @@ func (h *Handlers) Feed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Feeder.Feed(r.Context(), req.URL, req.HTML, req.JobID); err != nil {
+	bucketID, err := h.Feeder.Feed(r.Context(), req.URL, req.HTML)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, models.StatusResponse{
-		Status: "accepted",
-		JobID:  req.JobID,
+		Status:   "accepted",
+		ParserID: bucketID,
 	})
 }
 
@@ -48,11 +49,11 @@ func (h *Handlers) Force(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.Feeder.Force(r.Context(), req.JobID)
+	h.Feeder.Force(r.Context(), req.ParserID)
 
 	writeJSON(w, http.StatusOK, models.StatusResponse{
-		Status: "triggered",
-		JobID:  req.JobID,
+		Status:   "triggered",
+		ParserID: req.ParserID,
 	})
 }
 

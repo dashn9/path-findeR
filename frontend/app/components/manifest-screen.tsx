@@ -127,7 +127,7 @@ function ManifestTree({ parser }: { parser: ParserDoc }) {
             <span className="text-ink-3">{parser.url_pattern.pattern}</span>
           </div>
         </div>
-        <div className="font-mono text-[11px] text-ink-3">{parser.pages_seen || 0} pages in corpus</div>
+        <div className="font-mono text-[11px] text-ink-3">{parser.page_count || 0} pages in corpus</div>
       </div>
 
       <div className="grid gap-4">
