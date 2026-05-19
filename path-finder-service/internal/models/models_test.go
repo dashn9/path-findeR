@@ -17,18 +17,18 @@ func TestFeedRequestJSON(t *testing.T) {
 }
 
 func TestForceRequestJSON(t *testing.T) {
-	raw := `{"parser_id":"example.com:a1b2c3d4"}`
+	raw := `{"parser_id":"507f1f77bcf86cd799439011"}`
 	var req ForceRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.ParserID != "example.com:a1b2c3d4" {
+	if req.ParserID != "507f1f77bcf86cd799439011" {
 		t.Errorf("ParserID = %s", req.ParserID)
 	}
 }
 
 func TestRegenerationRequestFull(t *testing.T) {
-	raw := `{"parser_id":"example.com:a1b2c3d4","labels":["title","price"],"force":true}`
+	raw := `{"parser_id":"507f1f77bcf86cd799439011","labels":["title","price"],"force":true}`
 	var req RegenerationRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestRegenerationRequestFull(t *testing.T) {
 }
 
 func TestStatusResponseOmitsEmpty(t *testing.T) {
-	resp := StatusResponse{Status: "accepted", ParserID: "example.com:abc"}
+	resp := StatusResponse{Status: "accepted", ParserID: "507f1f77bcf86cd799439011"}
 	data, _ := json.Marshal(resp)
 	var m map[string]interface{}
 	json.Unmarshal(data, &m)
@@ -50,11 +50,11 @@ func TestStatusResponseOmitsEmpty(t *testing.T) {
 
 func TestManifestDocRoundtrip(t *testing.T) {
 	doc := ManifestDoc{
-		ID:          "example.com:a1b2c3d4",
+		ID:          "507f1f77bcf86cd799439011",
 		Hostname:    "example.com",
 		URLTokens:   []string{"products", "*"},
 		URLSegCount: 2,
-		State:       BucketForming,
+		State:       ParserForming,
 		ShapeRefs: []ShapeRef{
 			{Paths: []string{"html", "html>body"}, Marks: []string{"#main"}},
 		},
@@ -69,7 +69,7 @@ func TestManifestDocRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.State != BucketForming {
+	if parsed.State != ParserForming {
 		t.Errorf("State = %s", parsed.State)
 	}
 	if len(parsed.ShapeRefs) != 1 || len(parsed.ShapeRefs[0].Paths) != 2 {

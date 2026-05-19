@@ -66,13 +66,11 @@ pub extern "C" fn pfr_run(
 }
 
 /// Compute the structural shape of a page and return it as JSON:
-/// `{"paths": [...], "marks": [...], "id": "a1b2c3d4"}`.
+/// `{"paths": [...], "marks": [...]}`.
 ///
 /// - `paths`: depth-capped root-to-node tag paths.
 /// - `marks`: stable identifiers — `#id` values, `role=...`, `aria-*=...`,
 ///   and "stable-looking" classes (CSS-in-JS hashes filtered out).
-/// - `id`: 8-char FNV-1a of the sorted path set, suitable as the tail of a
-///   bucket ID (`<host>:<id>`).
 ///
 /// Caller must free with `pfr_free`. Returns null on error.
 #[unsafe(no_mangle)]
@@ -132,6 +130,40 @@ pub extern "C" fn pfr_shape_jaccard(a_json: *const c_char, b_json: *const c_char
         }
         Err(_) => {
             set_last_error("shape_jaccard panicked".to_string());
+            -1.0
+        }
+    }
+}
+
+/// Routing-grade similarity between two shape path sets: max of Jaccard and
+/// overlap coefficient. Forgiving when one set is a near-subset of the
+/// other (typical for template-shared pages where one has optional blocks
+/// like reviews and the other doesn't). Inputs and return shape match
+/// `pfr_shape_jaccard`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pfr_shape_similarity(a_json: *const c_char, b_json: *const c_char) -> f64 {
+    let result = std::panic::catch_unwind(|| {
+        let a_str = unsafe { CStr::from_ptr(a_json) }
+            .to_str()
+            .map_err(|e| format!("invalid a UTF-8: {e}"))?;
+        let b_str = unsafe { CStr::from_ptr(b_json) }
+            .to_str()
+            .map_err(|e| format!("invalid b UTF-8: {e}"))?;
+        let a: Vec<String> = serde_json::from_str(a_str)
+            .map_err(|e| format!("a JSON parse error: {e}"))?;
+        let b: Vec<String> = serde_json::from_str(b_str)
+            .map_err(|e| format!("b JSON parse error: {e}"))?;
+        Ok::<f64, String>(shape::similarity(&a, &b))
+    });
+
+    match result {
+        Ok(Ok(score)) => score,
+        Ok(Err(e)) => {
+            set_last_error(e);
+            -1.0
+        }
+        Err(_) => {
+            set_last_error("shape_similarity panicked".to_string());
             -1.0
         }
     }

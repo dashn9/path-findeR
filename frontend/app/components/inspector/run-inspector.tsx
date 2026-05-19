@@ -7,12 +7,28 @@ import { Badge } from "../ui/badge";
 import { DomContext } from "./dom-context";
 import { ValidationGrid } from "./validation-grid";
 import { ActivityLog } from "./activity-log";
-import { MOCK_TRACES } from "../../lib/mockData";
-import type { ParserDoc, ParserTrace } from "../../lib/types";
+import type { ActivityEvent, ParserDoc, ParserTrace } from "../../lib/types";
 import { cn } from "../../lib/utils";
 
+// Activity feed for the bottom panel: derived from the latest run's stage
+// events. Same source of truth as the Runs tab — no parallel backend channel.
+function activityFromParser(parser: ParserDoc): ActivityEvent[] {
+  const runs = parser.runs ?? [];
+  if (runs.length === 0) return [];
+  const latest = runs[runs.length - 1];
+  return latest.events.map((e) => ({
+    t: new Date(e.at_ms).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }),
+    kind: `stage/${e.stage}`,
+    payload: e.name,
+  }));
+}
+
 export function RunInspector({ parser }: { parser: ParserDoc }) {
-  const trace = MOCK_TRACES[parser._id];
+  const trace = parser.trace;
   const allLabels = parser.parser ? Object.keys(parser.parser) : [];
   const initialLabel = allLabels[0] ?? null;
   const [activeLabel, setActiveLabel] = useState<string | null>(initialLabel);
@@ -29,8 +45,8 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
   if (!trace) {
     return (
       <EmptyState
-        title="No run trace recorded"
-        body="Inspector requires telemetry from a completed run. Feed pages and re-run to capture."
+        title="No run trace yet"
+        body="The pipeline emits Inspector trace data when it completes. Once a run finishes (see the Runs tab) this view will populate."
       />
     );
   }
@@ -38,6 +54,18 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
 
   const lab = trace.labels[activeLabel];
   const def = parser.parser[activeLabel];
+
+  if (!lab) {
+    return (
+      <EmptyState
+        title="No trace for this label"
+        body={`Label "${activeLabel}" exists in the manifest but wasn't part of the latest run's trace.`}
+      />
+    );
+  }
+
+  const activity = activityFromParser(parser);
+  const safePageIdx = trace.pages.length > 0 ? pageIdx % trace.pages.length : 0;
 
   return (
     <div className="grid gap-4">
@@ -171,7 +199,7 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
         <section className="grid gap-3 border border-rule bg-paper-surface p-4 pb-3 min-w-0">
           <header className="flex items-center justify-between border-b border-rule pb-2.5">
             <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">
-              DOM context · page {pageIdx + 1} of {trace.pages.length}
+              DOM context · page {safePageIdx + 1} of {trace.pages.length}
             </span>
             <div className="flex items-center gap-1.5">
               <button
@@ -182,7 +210,7 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
               >
                 <ChevronLeft size={12} />
               </button>
-              <code className="font-mono text-[11px] text-ink-2">{trace.pages[pageIdx].short}</code>
+              <code className="font-mono text-[11px] text-ink-2">{trace.pages[safePageIdx]?.short ?? "—"}</code>
               <button
                 type="button"
                 aria-label="Next page"
@@ -250,16 +278,15 @@ export function RunInspector({ parser }: { parser: ParserDoc }) {
           <div className="grid gap-2.5 border border-rule bg-paper-surface px-4 py-3.5">
             <header className="flex items-center justify-between border-b border-rule pb-2.5">
               <span className="font-mono text-[11px] uppercase tracking-wider text-ink-3">LLM rationale</span>
-              <span className="font-mono text-ink-3">gpt-4o-mini</span>
             </header>
             <blockquote className="m-0 border border-rule border-l-3 border-l-ink-1 bg-paper-elevated px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-ink-1">
-              {lab.rationale}
+              {lab.rationale || <span className="text-ink-3">— model did not emit a rationale for this label</span>}
             </blockquote>
           </div>
         </section>
       </div>
 
-      <ActivityLog rows={trace.activity} />
+      {activity.length > 0 && <ActivityLog rows={activity} />}
     </div>
   );
 }

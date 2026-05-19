@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Inbox, List, Settings, Terminal } from "lucide-react";
+import { AlertTriangle, Inbox, List, RefreshCw, Settings, Terminal } from "lucide-react";
 import type { ReactNode } from "react";
 import { Toast } from "./ui/toast";
 import { useStore } from "../lib/store";
+import { useHealthQuery } from "../lib/hooks/api/queries/health";
+import { useParsersQuery } from "../lib/hooks/api/queries/parsers";
 import { cn } from "../lib/utils";
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { toasts, dismissToast, parsers } = useStore();
+  const { toasts, dismissToast } = useStore();
+  const { data: parsers = [] } = useParsersQuery();
   const pathname = usePathname();
   const routeId = pathname.match(/^\/parser\/([^/?#]+)/)?.[1];
   const activeParserId = routeId
@@ -19,6 +22,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-full flex-col">
       <TopBar activeParserId={activeParserId} />
+      <UnreachableBanner />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
         <main className="flex-1 min-w-0 max-w-7xl px-12 pt-8 pb-24">{children}</main>
@@ -61,10 +65,7 @@ function TopBar({ activeParserId }: { activeParserId: string | null }) {
       </div>
 
       <div className="flex items-center gap-3.5">
-        <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-2">
-          <i className="inline-block h-1.5 w-1.5 flex-none rounded-full bg-success pulse-dot" />
-          <span className="font-mono">healthy</span>
-        </span>
+        <HealthPill />
         <Link
           href="/settings"
           className="grid h-7 w-7 place-items-center rounded-xs text-ink-2 transition-colors hover:bg-paper-sunken hover:text-ink-1"
@@ -77,6 +78,56 @@ function TopBar({ activeParserId }: { activeParserId: string | null }) {
   );
 }
 
+// Derived purely from the react-query state: success → healthy, error →
+// unreachable, no data yet → checking. No mirrored store state.
+function HealthPill() {
+  const q = useHealthQuery();
+  let dot = "bg-ink-3", label = "checking…", color = "text-ink-3";
+  if (q.isSuccess) {
+    dot = "bg-success pulse-dot"; label = "healthy"; color = "text-ink-2";
+  } else if (q.isError) {
+    dot = "bg-danger"; label = "unreachable"; color = "text-danger";
+  }
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 text-[11px]", color)}>
+      <i className={cn("inline-block h-1.5 w-1.5 flex-none rounded-full", dot)} />
+      <span className="font-mono">{label}</span>
+    </span>
+  );
+}
+
+function UnreachableBanner() {
+  const { baseUrl } = useStore();
+  const q = useHealthQuery();
+  if (!q.isError) return null;
+
+  return (
+    <div
+      role="alert"
+      className="sticky top-13 z-20 flex items-center gap-3 border-b border-danger/40 bg-danger-soft px-6 py-2 text-xs"
+    >
+      <AlertTriangle size={14} className="flex-none text-danger" />
+      <div className="flex-1 min-w-0 leading-snug">
+        <span className="font-mono font-medium text-danger">Service unreachable.</span>{" "}
+        <span className="text-ink-2">
+          Can't reach <span className="font-mono text-ink-1">{baseUrl}</span>. Feeds and parser
+          actions will fail until the connection is restored. Verify the service is running, or
+          update the endpoint in <Link href="/settings" className="underline">Settings</Link>.
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={() => q.refetch()}
+        disabled={q.isFetching}
+        className="inline-flex flex-none items-center gap-1.5 border border-danger/40 bg-paper-elevated px-2 py-0.5 font-mono text-[11px] text-danger transition-colors hover:bg-paper-sunken disabled:opacity-45 disabled:cursor-not-allowed"
+      >
+        <RefreshCw size={12} className={cn(q.isFetching && "animate-spin")} />
+        {q.isFetching ? "checking…" : "retry"}
+      </button>
+    </div>
+  );
+}
+
 function Sidebar() {
   const pathname = usePathname();
   const items = [
@@ -84,9 +135,16 @@ function Sidebar() {
       href: "/feed",
       label: "Feed",
       Icon: Inbox,
-      active: pathname === "/feed" || pathname === "/" || pathname.startsWith("/parser"),
+      active: pathname === "/feed" || pathname === "/",
     },
-    { href: "/history", label: "History", Icon: List, active: pathname.startsWith("/history") },
+    {
+      href: "/parsers",
+      label: "Parsers",
+      Icon: List,
+      // /parser/{id} is the detail view of a parser — belongs under Parsers,
+      // not Feed.
+      active: pathname.startsWith("/parsers") || pathname.startsWith("/parser/"),
+    },
     { href: "/settings", label: "Settings", Icon: Settings, active: pathname.startsWith("/settings") },
   ];
 

@@ -1,5 +1,5 @@
 import { HistoryScreen } from "../components/history-screen";
 
-export default function HistoryPage() {
+export default function ParsersPage() {
   return <HistoryScreen />;
 }

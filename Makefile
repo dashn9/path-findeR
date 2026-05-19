@@ -19,6 +19,11 @@ else
     endif
 endif
 
+# `go run -C path-finder-service` changes CWD to the service dir, so a naked
+# `godotenv.Load(".env")` wouldn't find the repo-root .env. Pin the path
+# explicitly so credentials load no matter where make is invoked from.
+export ENV_FILE := $(CURDIR)/.env
+
 .PHONY: run build core service test clean
 
 ## run: build the Rust core, then start the Go service (foreground, port 7117).

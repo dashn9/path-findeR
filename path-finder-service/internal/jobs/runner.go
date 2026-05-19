@@ -13,9 +13,14 @@ import (
 	"github.com/user/path-finder-service/internal/storage"
 )
 
+// MaxRunsRetained caps the rolling run-history kept on a parser doc so
+// the document size stays bounded across many regenerations.
+const MaxRunsRetained = 20
+
 type JobRunner struct {
 	corpus      storage.CorpusStore
 	parserStore *storage.ParserStore
+	progress    *storage.ProgressStore
 	pipeline    config.PipelineConfig
 	ai          config.AIConfig
 	cooldown    time.Duration
@@ -23,7 +28,7 @@ type JobRunner struct {
 	running     map[string]bool
 }
 
-func NewJobRunner(corpus storage.CorpusStore, parserStore *storage.ParserStore, pipeline config.PipelineConfig, ai config.AIConfig) *JobRunner {
+func NewJobRunner(corpus storage.CorpusStore, parserStore *storage.ParserStore, progress *storage.ProgressStore, pipeline config.PipelineConfig, ai config.AIConfig) *JobRunner {
 	cooldown := time.Duration(pipeline.RerunCooldownSeconds) * time.Second
 	if cooldown < 0 {
 		cooldown = 0
@@ -31,6 +36,7 @@ func NewJobRunner(corpus storage.CorpusStore, parserStore *storage.ParserStore, 
 	return &JobRunner{
 		corpus:      corpus,
 		parserStore: parserStore,
+		progress:    progress,
 		pipeline:    pipeline,
 		ai:          ai,
 		cooldown:    cooldown,
@@ -38,58 +44,77 @@ func NewJobRunner(corpus storage.CorpusStore, parserStore *storage.ParserStore, 
 	}
 }
 
-type regenerateOpts struct {
+// runOpts marks a trigger as user-initiated. Non-nil opts bypass the
+// new-pages check and the failed-status circuit breaker — the user is
+// explicitly asking for a retry, so don't second-guess them.
+type runOpts struct {
 	labels []string
 }
 
-// Trigger asks the runner to (re-)derive the parser for bucketID. The call
-// is rate-limited by an in-flight dedup, a cooldown since the last run, and
-// a "are there even new pages?" check against the corpus.
-func (r *JobRunner) Trigger(ctx context.Context, bucketID string) {
-	r.trigger(ctx, bucketID, nil)
+// Trigger is the auto-trigger path from the feeder. Respects every safety
+// guard: cooldown, new-pages-since-last-run, and the failed-status circuit
+// breaker (a parser in `failed` won't auto-retry until the user forces it).
+func (r *JobRunner) Trigger(ctx context.Context, parserID string) {
+	r.trigger(ctx, parserID, nil)
 }
 
-func (r *JobRunner) trigger(ctx context.Context, bucketID string, regen *regenerateOpts) {
+// Force is the user-initiated retry path. Honors the cooldown (avoid
+// hammering) but skips the new-pages check and the failed-status guard.
+func (r *JobRunner) Force(ctx context.Context, parserID string) {
+	r.trigger(ctx, parserID, &runOpts{})
+}
+
+func (r *JobRunner) trigger(ctx context.Context, parserID string, opts *runOpts) {
 	r.mu.Lock()
-	if r.running[bucketID] {
+	if r.running[parserID] {
 		r.mu.Unlock()
 		return
 	}
-	r.running[bucketID] = true
+	r.running[parserID] = true
 	r.mu.Unlock()
 
-	if !r.shouldRun(ctx, bucketID, regen) {
+	if !r.shouldRun(ctx, parserID, opts) {
 		r.mu.Lock()
-		delete(r.running, bucketID)
+		delete(r.running, parserID)
 		r.mu.Unlock()
 		return
 	}
 
-	go r.run(context.Background(), bucketID, regen)
+	go r.run(context.Background(), parserID, opts)
 }
 
-// shouldRun applies cooldown + new-pages guards. Regeneration requests bypass
-// the new-pages check (the caller is explicit) but still respect the cooldown.
-func (r *JobRunner) shouldRun(ctx context.Context, bucketID string, regen *regenerateOpts) bool {
-	doc, err := r.parserStore.Get(ctx, bucketID)
+// shouldRun applies the safety guards: cooldown always, plus the failed
+// circuit breaker + new-pages check for *auto* triggers. User-initiated
+// runs (opts != nil) bypass both of the latter.
+func (r *JobRunner) shouldRun(ctx context.Context, parserID string, opts *runOpts) bool {
+	doc, err := r.parserStore.Get(ctx, parserID)
 	if err != nil {
-		slog.Error("manifest fetch failed", "bucket_id", bucketID, "err", err)
+		slog.Error("manifest fetch failed", "parser_id", parserID, "err", err)
 		return false
 	}
 	if doc == nil {
-		// First run for the bucket — nothing to compare against.
+		// First run for this parser — nothing to compare against.
 		return true
 	}
 
 	if doc.LastTriggeredAt != nil && r.cooldown > 0 {
 		if time.Since(*doc.LastTriggeredAt) < r.cooldown {
-			slog.Debug("cooldown active, skipping", "bucket_id", bucketID)
+			slog.Debug("cooldown active, skipping", "parser_id", parserID)
 			return false
 		}
 	}
 
-	if regen != nil {
+	if opts != nil {
 		return true
+	}
+
+	// Circuit breaker: a parser that crashed for a deterministic reason
+	// (config bug, malformed AI response, etc.) shouldn't keep auto-retrying
+	// every time a new page lands. The user has to Force/Regenerate to
+	// signal "I think it'll work now".
+	if doc.Status == models.StatusFailed {
+		slog.Debug("parser is in failed state, auto-trigger blocked", "parser_id", parserID)
+		return false
 	}
 
 	reference := doc.CreatedAt
@@ -99,69 +124,115 @@ func (r *JobRunner) shouldRun(ctx context.Context, bucketID string, regen *regen
 	if doc.CompletedAt != nil && doc.CompletedAt.After(reference) {
 		reference = *doc.CompletedAt
 	}
-	hasNew, err := r.corpus.HasPagesNewerThan(ctx, bucketID, reference)
+	hasNew, err := r.corpus.HasPagesNewerThan(ctx, doc.Hostname, parserID, reference)
 	if err != nil {
-		slog.Error("new-pages check failed", "bucket_id", bucketID, "err", err)
+		slog.Error("new-pages check failed", "parser_id", parserID, "err", err)
 		return false
 	}
 	if !hasNew {
-		slog.Debug("no new pages since last run, skipping", "bucket_id", bucketID)
+		slog.Debug("no new pages since last run, skipping", "parser_id", parserID)
 		return false
 	}
 	return true
 }
 
-func (r *JobRunner) run(ctx context.Context, bucketID string, regen *regenerateOpts) {
+func (r *JobRunner) run(ctx context.Context, parserID string, opts *runOpts) {
 	defer func() {
 		r.mu.Lock()
-		delete(r.running, bucketID)
+		delete(r.running, parserID)
 		r.mu.Unlock()
 	}()
 
 	now := time.Now()
-	if err := r.parserStore.SetLastTriggered(ctx, bucketID, now); err != nil {
-		slog.Error("set last_triggered failed", "bucket_id", bucketID, "err", err)
+	if err := r.parserStore.SetLastTriggered(ctx, parserID, now); err != nil {
+		slog.Error("set last_triggered failed", "parser_id", parserID, "err", err)
 		return
 	}
-	if err := r.parserStore.UpdateStatus(ctx, bucketID, models.StatusRunning, nil); err != nil {
-		slog.Error("manifest status update failed", "bucket_id", bucketID, "err", err)
+	if err := r.parserStore.UpdateStatus(ctx, parserID, models.StatusRunning, nil); err != nil {
+		slog.Error("manifest status update failed", "parser_id", parserID, "err", err)
 		return
 	}
 
-	existing, _ := r.parserStore.Get(ctx, bucketID)
+	existing, err := r.parserStore.Get(ctx, parserID)
+	if err != nil || existing == nil {
+		slog.Error("manifest fetch failed", "parser_id", parserID, "err", err)
+		return
+	}
 
-	pages, err := r.corpus.GetAll(ctx, bucketID)
+	pages, err := r.corpus.GetAll(ctx, existing.Hostname, parserID)
 	if err != nil {
-		slog.Error("corpus fetch failed", "bucket_id", bucketID, "err", err)
+		slog.Error("corpus fetch failed", "parser_id", parserID, "err", err)
 		errStr := err.Error()
-		_ = r.parserStore.UpdateStatus(ctx, bucketID, models.StatusFailed, &errStr)
+		_ = r.parserStore.UpdateStatus(ctx, parserID, models.StatusFailed, &errStr)
+		r.finalizeRun(ctx, parserID, now, models.StatusFailed, &errStr)
 		return
 	}
 
-	result, err := core.RunPipeline(bucketID, storage.ToTuples(pages), r.pipeline, r.ai)
+	progressPath := ""
+	if r.progress != nil {
+		progressPath = r.progress.PathFor(parserID)
+	}
+	result, err := core.RunPipeline(parserID, storage.ToTuples(pages), r.pipeline, r.ai, progressPath)
 	if err != nil {
-		slog.Error("pipeline failed", "bucket_id", bucketID, "err", err)
+		slog.Error("pipeline failed", "parser_id", parserID, "err", err)
 		errStr := err.Error()
-		_ = r.parserStore.UpdateStatus(ctx, bucketID, models.StatusFailed, &errStr)
+		_ = r.parserStore.UpdateStatus(ctx, parserID, models.StatusFailed, &errStr)
+		r.finalizeRun(ctx, parserID, now, models.StatusFailed, &errStr)
 		return
 	}
 
-	if regen != nil && len(regen.labels) > 0 && existing != nil {
-		result, err = mergeLabels(result, existing.Parser, regen.labels)
+	if opts != nil && len(opts.labels) > 0 && existing != nil {
+		result, err = mergeLabels(result, existing.Parser, opts.labels)
 		if err != nil {
-			slog.Error("merge labels failed", "bucket_id", bucketID, "err", err)
+			slog.Error("merge labels failed", "parser_id", parserID, "err", err)
 			errStr := err.Error()
-			_ = r.parserStore.UpdateStatus(ctx, bucketID, models.StatusFailed, &errStr)
+			_ = r.parserStore.UpdateStatus(ctx, parserID, models.StatusFailed, &errStr)
+			r.finalizeRun(ctx, parserID, now, models.StatusFailed, &errStr)
 			return
 		}
 	}
 
-	if err := r.parserStore.UpdateResult(ctx, bucketID, result); err != nil {
-		slog.Error("save result failed", "bucket_id", bucketID, "err", err)
+	if err := r.parserStore.UpdateResult(ctx, parserID, result); err != nil {
+		slog.Error("save result failed", "parser_id", parserID, "err", err)
+		errStr := err.Error()
+		r.finalizeRun(ctx, parserID, now, models.StatusFailed, &errStr)
 		return
 	}
 
-	slog.Info("bucket run completed", "bucket_id", bucketID)
+	r.finalizeRun(ctx, parserID, now, models.StatusDone, nil)
+	slog.Info("parser run completed", "parser_id", parserID)
+}
+
+// finalizeRun folds the live progress snapshot into a persisted RunLog and
+// clears the snapshot file. Best-effort — a failure here doesn't roll back
+// the run, just leaves the audit trail thin.
+func (r *JobRunner) finalizeRun(ctx context.Context, parserID string, startedAt time.Time, status models.JobStatus, errMsg *string) {
+	if r.progress == nil {
+		return
+	}
+	snap, _ := r.progress.Read(parserID)
+	run := models.RunLog{
+		StartedAt:   startedAt.UTC(),
+		CompletedAt: time.Now().UTC(),
+		Status:      status,
+		Error:       errMsg,
+	}
+	if snap != nil {
+		run.Events = make([]models.StageEvent, len(snap.Events))
+		for i, e := range snap.Events {
+			run.Events[i] = models.StageEvent{Stage: e.Stage, Name: e.Name, AtMs: e.AtMs}
+		}
+		if status == models.StatusFailed && len(snap.Events) > 0 {
+			last := snap.Events[len(snap.Events)-1].Stage
+			run.FailedStage = &last
+		}
+	}
+	if err := r.parserStore.AppendRunLog(ctx, parserID, run, MaxRunsRetained); err != nil {
+		slog.Warn("append run log failed", "parser_id", parserID, "err", err)
+	}
+	if err := r.progress.Clear(parserID); err != nil {
+		slog.Warn("clear progress failed", "parser_id", parserID, "err", err)
+	}
 }
 
 func (r *JobRunner) Regenerate(ctx context.Context, parserID string, labels []string, force bool) (json.RawMessage, error) {
@@ -178,7 +249,7 @@ func (r *JobRunner) Regenerate(ctx context.Context, parserID string, labels []st
 		if doc.CompletedAt != nil {
 			reference = *doc.CompletedAt
 		}
-		newer, err := r.corpus.HasPagesNewerThan(ctx, parserID, reference)
+		newer, err := r.corpus.HasPagesNewerThan(ctx, doc.Hostname, parserID, reference)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +258,7 @@ func (r *JobRunner) Regenerate(ctx context.Context, parserID string, labels []st
 		}
 	}
 
-	r.trigger(ctx, parserID, &regenerateOpts{labels: labels})
+	r.trigger(ctx, parserID, &runOpts{labels: labels})
 
 	resp, _ := json.Marshal(map[string]string{
 		"status":    "regeneration_triggered",

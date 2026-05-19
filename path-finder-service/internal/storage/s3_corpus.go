@@ -23,8 +23,8 @@ func NewS3CorpusStore(client *s3.Client, bucket string) *S3CorpusStore {
 	return &S3CorpusStore{client: client, bucket: bucket}
 }
 
-func (s *S3CorpusStore) Put(ctx context.Context, bucketID string, index int, url, html string) error {
-	key := pageKey(bucketID, index)
+func (s *S3CorpusStore) Put(ctx context.Context, hostname, parserID string, index int, url, html string) error {
+	key := pageKey(hostname, parserID, index)
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &s.bucket,
 		Key:         &key,
@@ -39,8 +39,8 @@ func (s *S3CorpusStore) Put(ctx context.Context, bucketID string, index int, url
 // per key. GetObject returns Metadata on the response, so a separate
 // HeadObject is unnecessary. Object order is restored from the numeric
 // filename so callers see pages in feed order, not S3's lexicographic listing.
-func (s *S3CorpusStore) GetAll(ctx context.Context, bucketID string) ([]Page, error) {
-	prefix := bucketPrefix(bucketID)
+func (s *S3CorpusStore) GetAll(ctx context.Context, hostname, parserID string) ([]Page, error) {
+	prefix := parserPrefix(hostname, parserID)
 	keys, err := s.listKeys(ctx, prefix)
 	if err != nil {
 		return nil, err
@@ -78,8 +78,8 @@ func (s *S3CorpusStore) GetAll(ctx context.Context, bucketID string) ([]Page, er
 	return pages, nil
 }
 
-func (s *S3CorpusStore) HasPagesNewerThan(ctx context.Context, bucketID string, t time.Time) (bool, error) {
-	prefix := bucketPrefix(bucketID)
+func (s *S3CorpusStore) HasPagesNewerThan(ctx context.Context, hostname, parserID string, t time.Time) (bool, error) {
+	prefix := parserPrefix(hostname, parserID)
 	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: &s.bucket,
 		Prefix: &prefix,
@@ -95,8 +95,67 @@ func (s *S3CorpusStore) HasPagesNewerThan(ctx context.Context, bucketID string, 
 	return false, nil
 }
 
-func (s *S3CorpusStore) Delete(ctx context.Context, bucketID string) error {
-	prefix := bucketPrefix(bucketID)
+func (s *S3CorpusStore) List(ctx context.Context, hostname, parserID string) ([]PageMeta, error) {
+	prefix := parserPrefix(hostname, parserID)
+	keys, err := s.listKeysWithMeta(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PageMeta, 0, len(keys))
+	for _, k := range keys {
+		idx := parseIndex(k.key, prefix)
+		// HeadObject is the only way to get user metadata (the source URL).
+		head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: &s.bucket,
+			Key:    &k.key,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("head %s: %w", k.key, err)
+		}
+		out = append(out, PageMeta{
+			URL:       head.Metadata["url"],
+			Index:     idx,
+			FetchedAt: k.lastModified,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	return out, nil
+}
+
+type s3KeyMeta struct {
+	key          string
+	lastModified time.Time
+}
+
+func (s *S3CorpusStore) listKeysWithMeta(ctx context.Context, prefix string) ([]s3KeyMeta, error) {
+	var out []s3KeyMeta
+	var token *string
+	for {
+		page, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            &s.bucket,
+			Prefix:            &prefix,
+			ContinuationToken: token,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list objects: %w", err)
+		}
+		for _, obj := range page.Contents {
+			mod := time.Time{}
+			if obj.LastModified != nil {
+				mod = obj.LastModified.UTC()
+			}
+			out = append(out, s3KeyMeta{key: aws.ToString(obj.Key), lastModified: mod})
+		}
+		if page.IsTruncated == nil || !*page.IsTruncated {
+			break
+		}
+		token = page.NextContinuationToken
+	}
+	return out, nil
+}
+
+func (s *S3CorpusStore) Delete(ctx context.Context, hostname, parserID string) error {
+	prefix := parserPrefix(hostname, parserID)
 	keys, err := s.listKeys(ctx, prefix)
 	if err != nil {
 		return err
@@ -135,13 +194,14 @@ func (s *S3CorpusStore) listKeys(ctx context.Context, prefix string) ([]string, 
 	return keys, nil
 }
 
-// bucketPrefix turns "host:shape" into the S3 prefix "host/shape/".
-func bucketPrefix(bucketID string) string {
-	return strings.ReplaceAll(bucketID, ":", "/") + "/"
+// parserPrefix builds the S3 key prefix "<hostname>/<parserID>/" so the
+// bucket layout is browsable by site, matching the local-fs layout.
+func parserPrefix(hostname, parserID string) string {
+	return hostname + "/" + parserID + "/"
 }
 
-func pageKey(bucketID string, index int) string {
-	return fmt.Sprintf("%s%d.html", bucketPrefix(bucketID), index)
+func pageKey(hostname, parserID string, index int) string {
+	return fmt.Sprintf("%s%d.html", parserPrefix(hostname, parserID), index)
 }
 
 func parseIndex(key, prefix string) int {

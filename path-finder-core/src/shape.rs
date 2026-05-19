@@ -27,28 +27,9 @@ const MAX_DEPTH: usize = 8;
 pub struct Shape {
     pub paths: Vec<String>,
     pub marks: Vec<String>,
-    pub id: String,
 }
 
-/// Short, stable ID derived from a sorted path set. FNV-1a — deterministic,
-/// no external dep.
-pub fn id(paths: &[String]) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for p in paths {
-        for b in p.as_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{:08x}", (h & 0xffffffff) as u32)
-}
-
-/// Jaccard similarity |A ∩ B| / |A ∪ B| on two sorted slices.
-pub fn jaccard(a: &[String], b: &[String]) -> f64 {
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
-    }
+fn intersection_size(a: &[String], b: &[String]) -> usize {
     let (mut i, mut j, mut inter) = (0usize, 0usize, 0usize);
     while i < a.len() && j < b.len() {
         match a[i].cmp(&b[j]) {
@@ -57,8 +38,34 @@ pub fn jaccard(a: &[String], b: &[String]) -> f64 {
             std::cmp::Ordering::Greater => j += 1,
         }
     }
+    inter
+}
+
+/// Jaccard similarity |A ∩ B| / |A ∪ B| on two sorted slices.
+pub fn jaccard(a: &[String], b: &[String]) -> f64 {
+    if a.is_empty() || b.is_empty() { return 0.0; }
+    let inter = intersection_size(a, b);
     let union = a.len() + b.len() - inter;
     inter as f64 / union as f64
+}
+
+/// Overlap coefficient |A ∩ B| / min(|A|, |B|). Forgiving of size mismatch —
+/// pages of the same template often differ by optional blocks (reviews,
+/// recommendations), so one's path set is a near-subset of the other's.
+/// Jaccard punishes that; overlap doesn't.
+pub fn overlap(a: &[String], b: &[String]) -> f64 {
+    if a.is_empty() || b.is_empty() { return 0.0; }
+    let inter = intersection_size(a, b);
+    let min = a.len().min(b.len());
+    inter as f64 / min as f64
+}
+
+/// Routing similarity: max(jaccard, overlap). Two pages with near-equal
+/// sizes and high agreement clear via Jaccard; pages where one is
+/// "template + extras" clear via overlap. Host-scoped routing already
+/// guards against cross-site false merges so the looser score is safe.
+pub fn similarity(a: &[String], b: &[String]) -> f64 {
+    jaccard(a, b).max(overlap(a, b))
 }
 
 /// Compute both signal sets in one DOM walk.
@@ -115,8 +122,7 @@ pub fn compute(html: &str) -> Shape {
     paths.sort();
     let mut marks: Vec<String> = marks.into_iter().collect();
     marks.sort();
-    let id = id(&paths);
-    Shape { paths, marks, id }
+    Shape { paths, marks }
 }
 
 /// Heuristic class filter: drop CSS-in-JS-looking hashes. A class is "stable"

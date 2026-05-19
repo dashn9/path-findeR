@@ -2,20 +2,18 @@ package feeders
 
 import (
 	"net/url"
-	"regexp"
 	"strings"
 )
 
-// dynamicSegment matches segments that look like generated IDs: any token
-// containing 3+ consecutive digits (post-1234-title, /123/, ...), or a pure
-// 8+ hex string (UUIDs, hashes).
-var dynamicSegment = regexp.MustCompile(`\d{3,}|^[0-9a-f]{8,}$`)
+// wildcard is the in-pattern marker for a dynamic position. A parser's
+// URLTokens starts as the raw path tokens of its first page and gradually
+// gets positions replaced with "*" as more pages arrive and disagree there.
+const wildcard = "*"
 
-// extractHostAndTokens normalizes the URL into the bucket-routing signal:
-// a lowercased hostname (www. stripped, port dropped) and the list of path
-// segments with dynamic-looking segments replaced by "*". Same template at
-// different IDs collapses to the same token list, different templates
-// diverge on the static positions.
+// extractHostAndTokens normalizes the URL into the routing signal: a
+// lowercased hostname (www. stripped, port dropped) and the *raw* path
+// segments. No per-URL static/dynamic guess — classification is inferred
+// from multiple pages later by divergencePosition / updatedPattern.
 func extractHostAndTokens(raw string) (host string, tokens []string, err error) {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -35,30 +33,37 @@ func extractHostAndTokens(raw string) (host string, tokens []string, err error) 
 		if derr != nil {
 			decoded = seg
 		}
-		decoded = strings.ToLower(decoded)
-		if dynamicSegment.MatchString(decoded) {
-			tokens = append(tokens, "*")
-		} else {
-			tokens = append(tokens, decoded)
-		}
+		tokens = append(tokens, strings.ToLower(decoded))
 	}
 	return host, tokens, nil
 }
 
-// tokensMatch returns true iff two token lists agree at every position. Used
-// as a hard pre-filter on bucket candidates — a single static-token mismatch
-// means the URLs target different templates (e.g. /users/123 vs /products/123)
-// and the bucket can't be shared, regardless of shape similarity.
-func tokensMatch(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+// updatedPattern returns the parser's new URLTokens after absorbing one more
+// page: every position where the existing pattern and the incoming tokens
+// disagree (and isn't already a wildcard) becomes a wildcard. Lengths
+// differing is a no-op (we keep the existing pattern); url_tokens is purely
+// cosmetic now, so cross-length convergence isn't worth modeling.
+func updatedPattern(pattern, tokens []string) []string {
+	if len(pattern) != len(tokens) {
+		return pattern
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	out := make([]string, len(pattern))
+	changed := false
+	for i := range pattern {
+		switch {
+		case pattern[i] == wildcard:
+			out[i] = wildcard
+		case pattern[i] == tokens[i]:
+			out[i] = pattern[i]
+		default:
+			out[i] = wildcard
+			changed = true
 		}
 	}
-	return true
+	if !changed {
+		return pattern
+	}
+	return out
 }
 
 type emptyHostErr struct{ raw string }

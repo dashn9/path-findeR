@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod ai_parser_builder;
 pub mod analyzer;
+pub mod cluster_detection;
 pub mod config;
 pub mod error;
 pub mod exclusions;

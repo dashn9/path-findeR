@@ -313,19 +313,36 @@ Direct in-process feeding of `(url, html)` pairs. No caller-supplied id — the 
 
 **Routing.** For each page the feeder produces two signals:
 
-- **URL tokens** — the hostname (lowercased, `www.` stripped, port dropped) plus the path segments. Each segment is classified `static` (kept) or `dynamic` (`*`) by a simple heuristic: 3+ consecutive digits or 8+ hex chars → dynamic. `/users/123` becomes `["users", "*"]`; `/products/cheese-wheel` becomes `["products", "cheese-wheel"]`.
+- **URL tokens** — the hostname (lowercased, `www.` stripped, port dropped) plus the path segments verbatim (lowercased). No per-URL static/dynamic guess; the pattern is *inferred from multiple pages over time*.
 - **Shape** — produced by the Rust core's `pfr_shape`:
   - `paths`: depth-capped (≤ 8) root-to-node tag paths. Tag names only.
   - `marks`: stable identifiers from element attributes — `#id` values, `role=...`, `aria-*=...`, and "stable-looking" classes (CSS-in-JS / framework hashes filtered out).
   - `id`: 8-char FNV-1a digest of the path set; tail of the bucket id.
 
-**Bucketing.** Candidate buckets for the page are existing buckets with the same hostname whose stored `url_tokens` exactly match the incoming tokens (any static-position disagreement disqualifies — `/users/123` and `/products/123` can never share a bucket regardless of structural similarity). Each surviving candidate is scored against every captured reference page via combined Jaccard:
+**Bucketing.** Candidate buckets for the page are existing buckets with the same hostname and same path segment count. Each candidate is then judged on two things:
 
-```
-score = 0.7 * J(new.paths, ref.paths) + 0.3 * J(new.marks, ref.marks)
-```
+1. **Leftmost URL divergence position D**. Compare the candidate's stored `url_tokens` (mixture of literals and `*`) against the incoming tokens left-to-right. D is the smallest index where the literal disagrees with the incoming token; D = -1 if every position matches (wildcards always match).
+2. **Combined shape score** against every captured reference page:
 
-The new page joins the bucket with the highest max-over-refs score if that score ≥ `PIPELINE_SHAPE_SIMILARITY_THRESHOLD` (default `0.75`). Otherwise a new bucket is created with id `<hostname>:<shape-id>`.
+   ```
+   score = 0.7 * J(new.paths, ref.paths) + 0.3 * J(new.marks, ref.marks)
+   ```
+
+   The candidate's score is the max over its refs.
+
+The candidate is admitted only if `score ≥ required(D)`, where `required` scales with D — leftmost divergence demands a near-identical shape, deep divergence accepts the floor threshold:
+
+| D (leftmost divergence) | required shape score |
+|---|---|
+| < 0 (URL fits pattern exactly) | trivially accept |
+| 0 (different category prefix) | ≥ 0.95 |
+| 1 | ≥ 0.85 |
+| 2 | ≥ 0.80 |
+| 3 or deeper (likely slug/id) | ≥ `PIPELINE_SHAPE_SIMILARITY_THRESHOLD` (default 0.75) |
+
+Among admitted candidates the best score wins (tie-break: lower required threshold — prefer a deep, low-stakes match over a tight leftmost one). The page joins that bucket and the bucket's `url_tokens` is updated: every position where its existing literal disagreed with the incoming token is promoted to `*`. Over a few pages the pattern converges from raw URL tokens (e.g. `["donuts","creme"]`) to the real template (e.g. `["donuts","*"]`).
+
+If no candidate is admitted, a new bucket is created with id `<hostname>:<shape-id>` and `url_tokens` set to the incoming tokens verbatim (literals only — no wildcards yet, since there's no evidence of variance).
 
 **Forming → stable.** New buckets start `forming`. While forming, every incoming page contributes its shape to `shape_refs` (capped, default 3 entries). Once `page_count` ≥ promotion threshold the bucket flips to `stable` and the captured refs are trusted as the template signature. This prevents a single anomalous first page (cookie banner, A/B variant, error state) from poisoning later matches.
 

@@ -23,28 +23,24 @@ const toneByStatus: Record<Status, { border: string; name: string }> = {
 
 const stageLabels = ["feed", "analyze", "label", "emit"] as const;
 
+// Synthetic four-cell glyph driven entirely off status. The richer per-stage
+// progress lives in ProgressBar + the Runs tab.
 export function StatusPill({
   status,
-  stage,
-  failStage,
   compact,
 }: {
   status?: string;
-  stage?: number;
-  failStage?: number;
   compact?: boolean;
 }) {
   const s = (status as Status) || "pending";
-  let filled = stage;
-  let fail = failStage;
-  if (filled == null) {
-    if (s === "pending") filled = 0;
-    else if (s === "running") filled = 1;
-    else if (s === "done") filled = 4;
-    else if (s === "failed") {
-      filled = 2;
-      if (fail == null) fail = 3;
-    }
+  let filled = 0;
+  let fail: number | undefined;
+  if (s === "pending") filled = 0;
+  else if (s === "running") filled = 1;
+  else if (s === "done") filled = 4;
+  else if (s === "failed") {
+    filled = 2;
+    fail = 3;
   }
   const tone = toneByStatus[s];
   const cellWidth = compact ? "w-3.5" : "w-4.5";

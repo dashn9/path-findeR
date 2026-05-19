@@ -5,24 +5,40 @@ import { useRouter } from "next/navigation";
 import { ManifestScreen } from "../../components/manifest-screen";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
-import { useStore } from "../../lib/store";
+import { useParserQuery } from "../../lib/hooks/api/queries/parsers";
+import { ApiError } from "../../lib/client";
 
 export default function ParserPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+  const { id: rawId } = use(params);
+  const id = decodeURIComponent(rawId);
   const router = useRouter();
-  const { parsers } = useStore();
-  const parser = parsers.find((p) => p._id === id);
+  // refetchInterval inside the query auto-polls while status === "running",
+  // so no manual setInterval here.
+  const { data: parser, isLoading, error } = useParserQuery(id);
 
-  if (!parser) {
+  if (isLoading && !parser) {
+    return <EmptyState title="Loading parser…" body={`parser_id ${id}`} />;
+  }
+
+  if (error instanceof ApiError && error.status === 404) {
     return (
       <EmptyState
         title="Parser not found"
         body={`parser_id ${id} — 404`}
         cta={
-          <Button variant="primary" onClick={() => router.push("/history")}>
-            Browse history
+          <Button variant="primary" onClick={() => router.push("/parsers")}>
+            Browse parsers
           </Button>
         }
+      />
+    );
+  }
+
+  if (!parser) {
+    return (
+      <EmptyState
+        title="Couldn't load parser"
+        body={error instanceof Error ? error.message : `parser_id ${id}`}
       />
     );
   }

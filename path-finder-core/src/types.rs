@@ -83,6 +83,58 @@ pub struct ParserManifest {
     pub parser_id: String,
     pub url_pattern: UrlPattern,
     pub parser: HashMap<String, Parser>,
+    /// Inspector trace — per-label candidate scoreboard, validation matrix,
+    /// extracted values, DOM context. Populated by the pipeline alongside the
+    /// final manifest so the UI can show "why did this selector get picked".
+    pub trace: ParserTrace,
+}
+
+/// One CSS selector candidate considered for a label, scored by per-page
+/// coverage. `note` is a short human-readable summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateSel {
+    pub css: String,
+    pub score: f32,
+    pub note: String,
+}
+
+/// One line in the rendered DOM-context snippet shown beside the chosen
+/// selector. `r#match` is true on the line that hosts the chosen element.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomLine {
+    pub i: usize,
+    pub t: String,
+    #[serde(rename = "match", skip_serializing_if = "Option::is_none")]
+    pub r#match: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelTrace {
+    pub rationale: String,
+    pub candidates: Vec<CandidateSel>,
+    /// Index into `candidates` of the selector actually adopted, or -1 when
+    /// the label is unresolved.
+    pub chosen: i32,
+    pub unresolved: bool,
+    /// Match matrix `[selectorIdx][pageIdx] = 0|1`. Renders as a heat grid
+    /// in the Inspector.
+    pub validation: Vec<Vec<u8>>,
+    pub dom: Vec<DomLine>,
+    /// Text extracted from each page by the first selector that matched
+    /// there. "(missing)" placeholder when no selector hit.
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageRef {
+    pub url: String,
+    pub short: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ParserTrace {
+    pub pages: Vec<PageRef>,
+    pub labels: HashMap<String, LabelTrace>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +178,10 @@ pub struct ScoredTree {
 pub struct AiLabelResult {
     pub label: String,
     pub gen_id: String,
+    /// Optional one-sentence reasoning the model emits for each label.
+    /// Surfaced in the Inspector. Empty when the model omitted it.
+    #[serde(default)]
+    pub rationale: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

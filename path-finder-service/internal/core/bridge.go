@@ -18,20 +18,23 @@ import (
 )
 
 // pipelinePayload is the JSON envelope sent over the FFI. Pipeline knobs are
-// embedded so they marshal flat; AI config nests under "ai".
+// embedded so they marshal flat; AI config nests under "ai"; progress_path
+// is appended per-run so the Rust core knows where to write its progress
+// snapshot.
 type pipelinePayload struct {
 	config.PipelineConfig
-	AI config.AIConfig `json:"ai"`
+	AI           config.AIConfig `json:"ai"`
+	ProgressPath string          `json:"progress_path"`
 }
 
-// RunPipeline calls the Rust core via FFI. Pipeline + AI configs marshal
-// straight from their config structs — no parallel DTOs.
-func RunPipeline(parserID string, pages [][2]string, pipeline config.PipelineConfig, ai config.AIConfig) (json.RawMessage, error) {
+// RunPipeline calls the Rust core via FFI. progressPath is the local file
+// the Rust core writes stage events to during the run (empty disables it).
+func RunPipeline(parserID string, pages [][2]string, pipeline config.PipelineConfig, ai config.AIConfig, progressPath string) (json.RawMessage, error) {
 	pagesJSON, err := json.Marshal(pages)
 	if err != nil {
 		return nil, fmt.Errorf("marshal pages: %w", err)
 	}
-	configJSON, err := json.Marshal(pipelinePayload{PipelineConfig: pipeline, AI: ai})
+	configJSON, err := json.Marshal(pipelinePayload{PipelineConfig: pipeline, AI: ai, ProgressPath: progressPath})
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}
@@ -59,15 +62,13 @@ func RunPipeline(parserID string, pages [][2]string, pipeline config.PipelineCon
 //   Paths: depth-capped root-to-node tag paths.
 //   Marks: stable identifiers (#id, role=, aria-*=, stable classes) — used
 //          to tiebreak shape matches on div-soup sites.
-//   ID:    8-char FNV-1a of the path set; tail of the bucket id.
 type Shape struct {
 	Paths []string `json:"paths"`
 	Marks []string `json:"marks"`
-	ID    string   `json:"id"`
 }
 
 // ComputeShape parses HTML in the Rust core and returns its structural shape.
-// The feeder uses this to bucket pages by template.
+// The feeder uses this to route pages to the matching parser.
 func ComputeShape(htmlStr string) (Shape, error) {
 	cHTML := C.CString(htmlStr)
 	defer C.free(unsafe.Pointer(cHTML))
@@ -88,9 +89,25 @@ func ComputeShape(htmlStr string) (Shape, error) {
 	return s, nil
 }
 
-// ShapeJaccard returns the similarity (0.0 to 1.0) between two shape path
-// sets. Negative results indicate an FFI/parse error.
+// ShapeJaccard returns Jaccard |A ∩ B| / |A ∪ B|. Negative results indicate
+// an FFI/parse error.
 func ShapeJaccard(a, b []string) (float64, error) {
+	return callShapeScore(a, b, "shape_jaccard", func(ca, cb *C.char) C.double {
+		return C.pfr_shape_jaccard(ca, cb)
+	})
+}
+
+// ShapeSimilarity is the routing-grade score: max(jaccard, overlap). Use
+// this for "should these two pages share a parser?" decisions — Jaccard
+// alone punishes pages of the same template that differ by optional blocks
+// (reviews, recommendations).
+func ShapeSimilarity(a, b []string) (float64, error) {
+	return callShapeScore(a, b, "shape_similarity", func(ca, cb *C.char) C.double {
+		return C.pfr_shape_similarity(ca, cb)
+	})
+}
+
+func callShapeScore(a, b []string, name string, call func(*C.char, *C.char) C.double) (float64, error) {
 	aJSON, err := json.Marshal(a)
 	if err != nil {
 		return 0, fmt.Errorf("marshal a: %w", err)
@@ -104,12 +121,12 @@ func ShapeJaccard(a, b []string) (float64, error) {
 	cB := C.CString(string(bJSON))
 	defer C.free(unsafe.Pointer(cB))
 
-	score := float64(C.pfr_shape_jaccard(cA, cB))
+	score := float64(call(cA, cB))
 	if score < 0 {
 		if msg := C.pfr_last_error(); msg != nil {
-			return 0, fmt.Errorf("shape_jaccard: %s", C.GoString(msg))
+			return 0, fmt.Errorf("%s: %s", name, C.GoString(msg))
 		}
-		return 0, fmt.Errorf("shape_jaccard: unknown error")
+		return 0, fmt.Errorf("%s: unknown error", name)
 	}
 	return score, nil
 }

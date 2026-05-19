@@ -29,13 +29,23 @@ char* pfr_run(const char* parser_id, const char* pages_json, const char* config_
 char* pfr_shape(const char* html);
 
 /**
- * Jaccard similarity between two shape path sets. Inputs are JSON arrays of
- * strings (the "paths" field of a pfr_shape result).
+ * Jaccard similarity |A ∩ B| / |A ∪ B| between two shape path sets. Inputs
+ * are JSON arrays of strings (the "paths" field of a pfr_shape result).
  *
  * @return  Score in [0.0, 1.0], or a negative value on error
  *          (check pfr_last_error).
  */
 double pfr_shape_jaccard(const char* a_json, const char* b_json);
+
+/**
+ * Routing-grade similarity: max(jaccard, overlap). Overlap coefficient is
+ * |A ∩ B| / min(|A|, |B|), which stays high when one set is a near-subset
+ * of the other — the typical case for two pages of the same template that
+ * differ only by optional sections (reviews, recommendations).
+ *
+ * Inputs and return match pfr_shape_jaccard.
+ */
+double pfr_shape_similarity(const char* a_json, const char* b_json);
 
 /**
  * Free a string returned by pfr_run or pfr_shape.

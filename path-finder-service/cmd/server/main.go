@@ -42,12 +42,21 @@ func main() {
 		slog.Error("mongo ping", "uri", cfg.Mongo.URI, "err", err)
 		os.Exit(1)
 	}
-	parserStore := storage.NewParserStore(mongoClient.Database(cfg.Mongo.DB).Collection(cfg.Mongo.Collection))
+	db := mongoClient.Database(cfg.Mongo.DB)
+	parserStore := storage.NewParserStore(db.Collection(cfg.Mongo.Collection))
+	feedStore := storage.NewFeedStore(db.Collection(cfg.Mongo.FeedDecisionsColl))
 
-	runner := jobs.NewJobRunner(corpus, parserStore, cfg.Pipeline, cfg.AI)
+	progress, err := storage.NewProgressStore(cfg.Storage.ProgressDir)
+	if err != nil {
+		slog.Error("progress store init", "err", err)
+		os.Exit(1)
+	}
+
+	runner := jobs.NewJobRunner(corpus, parserStore, progress, cfg.Pipeline, cfg.AI)
 	feeder := feeders.NewFunctionFeeder(
 		corpus,
 		parserStore,
+		feedStore,
 		runner,
 		cfg.Pipeline.MinPages,
 		cfg.Pipeline.ShapeSimilarityThreshold,
@@ -57,16 +66,26 @@ func main() {
 		Feeder:      feeder,
 		Runner:      runner,
 		ParserStore: parserStore,
+		FeedStore:   feedStore,
+		Corpus:      corpus,
+		Progress:    progress,
+		Config:      cfg,
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(corsMiddleware)
 
 	r.Get("/health", h.Health)
+	r.Get("/config", h.GetConfig)
 	r.Post("/feed", h.Feed)
 	r.Post("/force", h.Force)
+	r.Get("/parsers", h.ListParsers)
 	r.Get("/parser/{parserID}", h.GetParser)
+	r.Delete("/parser/{parserID}", h.NukeParser)
+	r.Get("/parser/{parserID}/corpus", h.ListCorpus)
+	r.Get("/parser/{parserID}/feeds", h.ListFeeds)
 	r.Post("/regenerate", h.Regenerate)
 
 	slog.Info("listening",
@@ -77,6 +96,27 @@ func main() {
 		slog.Error("server", "err", err)
 		os.Exit(1)
 	}
+}
+
+// corsMiddleware: dev-friendly permissive CORS. Reflects the request's
+// Origin so credentialed fetches work, and short-circuits OPTIONS preflights.
+// Tighten to an allowlist before production.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // buildCorpusStore wires the configured storage adapter. S3 reads its creds

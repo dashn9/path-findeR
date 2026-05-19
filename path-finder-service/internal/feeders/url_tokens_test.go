@@ -4,9 +4,9 @@ import "testing"
 
 func TestExtractHost(t *testing.T) {
 	cases := map[string]string{
-		"https://Shop.Example.com/products/123":  "shop.example.com",
-		"https://www.shop.example.com/p/1":       "shop.example.com",
-		"http://shop.example.com:8080/p/1":       "shop.example.com",
+		"https://Shop.Example.com/products/123": "shop.example.com",
+		"https://www.shop.example.com/p/1":      "shop.example.com",
+		"http://shop.example.com:8080/p/1":      "shop.example.com",
 	}
 	for raw, want := range cases {
 		host, _, err := extractHostAndTokens(raw)
@@ -19,16 +19,15 @@ func TestExtractHost(t *testing.T) {
 	}
 }
 
-func TestTokenClassification(t *testing.T) {
+func TestExtractTokensRaw(t *testing.T) {
+	// The classifier is gone — tokens come back verbatim (lowercased).
 	cases := []struct {
 		raw  string
 		want []string
 	}{
-		{"https://x.com/products/123", []string{"products", "*"}},
+		{"https://x.com/products/123", []string{"products", "123"}},
 		{"https://x.com/products/cheese-wheel", []string{"products", "cheese-wheel"}},
-		{"https://x.com/users/123", []string{"users", "*"}},
-		{"https://x.com/posts/abcd1234efgh5678", []string{"posts", "*"}},
-		{"https://x.com/posts/post-1234-title", []string{"posts", "*"}},
+		{"https://x.com/donuts/creme", []string{"donuts", "creme"}},
 		{"https://x.com/", nil},
 		{"https://x.com/about", []string{"about"}},
 	}
@@ -43,15 +42,22 @@ func TestTokenClassification(t *testing.T) {
 	}
 }
 
-func TestTokensMatch(t *testing.T) {
-	if !tokensMatch([]string{"products", "*"}, []string{"products", "*"}) {
-		t.Error("identical tokens should match")
+func TestUpdatedPattern(t *testing.T) {
+	// Slug merge — position 1 promoted to wildcard.
+	got := updatedPattern([]string{"donuts", "creme"}, []string{"donuts", "milky"})
+	if !equalSlices(got, []string{"donuts", "*"}) {
+		t.Errorf("got %v", got)
 	}
-	if tokensMatch([]string{"products", "*"}, []string{"users", "*"}) {
-		t.Error("different static positions must not match")
+	// Already wildcarded: no change to that position.
+	got = updatedPattern([]string{"donuts", "*"}, []string{"donuts", "jam"})
+	if !equalSlices(got, []string{"donuts", "*"}) {
+		t.Errorf("got %v", got)
 	}
-	if tokensMatch([]string{"a"}, []string{"a", "b"}) {
-		t.Error("different lengths must not match")
+	// Full agreement returns the same slice (no allocation churn signal).
+	in := []string{"donuts", "*"}
+	out := updatedPattern(in, []string{"donuts", "anything"})
+	if &in[0] != &out[0] {
+		t.Error("no-change update should return the same slice")
 	}
 }
 

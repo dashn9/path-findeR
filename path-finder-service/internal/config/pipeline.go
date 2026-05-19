@@ -13,11 +13,11 @@ type PipelineConfig struct {
 	OutputFormat        string   `json:"output_format"`
 	Exclusions          []string `json:"exclusions"`
 	MinPages            int      `json:"min_pages"`
-	// ShapeSimilarityThreshold gates which existing bucket a freshly fed page
+	// ShapeSimilarityThreshold gates which existing parser a freshly fed page
 	// joins. Stays Go-side (not forwarded to the Rust core).
 	ShapeSimilarityThreshold float64 `json:"-"`
 	// RerunCooldownSeconds is the minimum delay between consecutive pipeline
-	// runs for the same bucket. Stays Go-side.
+	// runs for the same parser. Stays Go-side.
 	RerunCooldownSeconds int `json:"-"`
 }
 
@@ -30,7 +30,9 @@ func loadPipeline() PipelineConfig {
 		SimilarityThreshold:      getenvFloat("PIPELINE_SIMILARITY_THRESHOLD", 0.75),
 		MaxRetries:               getenvInt("PIPELINE_MAX_RETRIES", 3),
 		OutputFormat:             getenv("PIPELINE_OUTPUT_FORMAT", "json"),
-		Exclusions:               nil,
+		// Non-nil so JSON marshals as [] not null — the Rust core deserializes
+		// this field as Vec<String> and rejects null.
+		Exclusions: []string{},
 		MinPages:                 getenvInt("PIPELINE_MIN_PAGES", 2),
 		ShapeSimilarityThreshold: getenvFloat("PIPELINE_SHAPE_SIMILARITY_THRESHOLD", 0.75),
 		RerunCooldownSeconds:     getenvInt("PIPELINE_RERUN_COOLDOWN_SECONDS", 60),

@@ -1,20 +1,21 @@
-// Package feeders accepts pages and routes them to the right parser bucket.
+// Package feeders accepts pages and routes them to the right parser.
 //
 // Routing pipeline per incoming page:
 //
-//  1. Normalize hostname + classify URL path segments into static/dynamic
-//     tokens (digits-heavy or hex/UUID → "*").
+//  1. Normalize hostname; capture raw path tokens for cosmetic display.
 //  2. Compute structural shape (paths + marks) via the Rust core.
-//  3. Filter existing buckets for the hostname to those whose url_tokens and
-//     url_seg_count exactly match. Cheap pre-filter; cuts impossibles.
-//  4. For each surviving candidate, score the new page against every captured
-//     shape_ref via combined Jaccard (0.7*paths + 0.3*marks). Take the max.
-//  5. Highest score >= threshold → join. Nothing qualifies → fresh bucket.
+//  3. For every parser on the same hostname, score the new page against
+//     every captured shape_ref via combined Jaccard (0.7*paths + 0.3*marks)
+//     and take the max.
+//  4. Highest score >= threshold → join. Nothing qualifies → fresh parser.
 //
-// Buckets start in `forming` state; the first PromotionPages shapes are all
+// URL path tokens are not part of the gate: same host + same shape is
+// enough. The stored url_tokens are kept only as a display hint that
+// converges to wildcards over time when lengths happen to match.
+//
+// Parsers start in `forming` state; the first PromotionPages shapes are all
 // pushed onto shape_refs (capped). Once page_count crosses PromotionPages,
-// the bucket flips to `stable` and the captured refs are trusted as the
-// template signature.
+// the parser flips to `stable` and the captured refs are trusted.
 package feeders
 
 import (
@@ -24,17 +25,18 @@ import (
 	"sync"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
 	"github.com/user/path-finder-service/internal/core"
 	"github.com/user/path-finder-service/internal/jobs"
 	"github.com/user/path-finder-service/internal/models"
 	"github.com/user/path-finder-service/internal/storage"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // Tunables that aren't exposed via env yet — pinned here for the first
 // testing version.
 const (
-	// PromotionPages: bucket flips from forming to stable once page_count
+	// PromotionPages: parser flips from forming to stable once page_count
 	// reaches this. The first N pages are *all* captured as shape_refs.
 	PromotionPages = 3
 	// MarkWeight: contribution of the marks Jaccard to the combined score.
@@ -45,18 +47,20 @@ const (
 type FunctionFeeder struct {
 	corpus         storage.CorpusStore
 	parserStore    *storage.ParserStore
+	feedStore      *storage.FeedStore
 	runner         *jobs.JobRunner
 	minPages       int
 	threshold      float64
 	promotionPages int
-	// hostMu serialises bucket creation per hostname so two near-simultaneous
-	// Feeds for the same template don't both insert duplicate buckets.
+	// hostMu serialises parser creation per hostname so two near-simultaneous
+	// Feeds for the same shape don't both insert duplicate parsers.
 	hostMu sync.Map
 }
 
 func NewFunctionFeeder(
 	corpus storage.CorpusStore,
 	parserStore *storage.ParserStore,
+	feedStore *storage.FeedStore,
 	runner *jobs.JobRunner,
 	minPages int,
 	threshold float64,
@@ -70,6 +74,7 @@ func NewFunctionFeeder(
 	return &FunctionFeeder{
 		corpus:         corpus,
 		parserStore:    parserStore,
+		feedStore:      feedStore,
 		runner:         runner,
 		minPages:       minPages,
 		threshold:      threshold,
@@ -77,8 +82,9 @@ func NewFunctionFeeder(
 	}
 }
 
-// Feed routes one (url, html) page to the matching bucket (or creates one),
-// persists the page, and triggers a run when the bucket reaches minPages.
+// Feed routes one (url, html) page to the matching parser (or creates one),
+// persists the page, records the routing decision, and triggers a run when
+// the parser reaches minPages.
 func (f *FunctionFeeder) Feed(ctx context.Context, pageURL, html string) (string, error) {
 	hostname, tokens, err := extractHostAndTokens(pageURL)
 	if err != nil {
@@ -90,12 +96,13 @@ func (f *FunctionFeeder) Feed(ctx context.Context, pageURL, html string) (string
 		return "", fmt.Errorf("compute shape: %w", err)
 	}
 
-	bucketID, isNew, err := f.routeToBucket(ctx, hostname, tokens, shape)
+	route, err := f.routeToParser(ctx, hostname, tokens, shape)
 	if err != nil {
 		return "", err
 	}
+	parserID := route.parserID
 
-	count, err := f.parserStore.IncrementPageCount(ctx, bucketID)
+	count, err := f.parserStore.IncrementPageCount(ctx, parserID)
 	if err != nil {
 		return "", fmt.Errorf("increment page count: %w", err)
 	}
@@ -103,41 +110,107 @@ func (f *FunctionFeeder) Feed(ctx context.Context, pageURL, html string) (string
 
 	// While forming, every page contributes to the template signature so a
 	// single weird first page can't poison subsequent matches.
-	if isNew || count <= f.promotionPages {
+	if route.created || count <= f.promotionPages {
 		ref := models.ShapeRef{Paths: shape.Paths, Marks: shape.Marks}
-		if err := f.parserStore.PushShapeRef(ctx, bucketID, ref, f.promotionPages); err != nil {
-			slog.Warn("push shape_ref failed", "parser_id", bucketID, "err", err)
+		if err := f.parserStore.PushShapeRef(ctx, parserID, ref, f.promotionPages); err != nil {
+			slog.Warn("push shape_ref failed", "parser_id", parserID, "err", err)
 		}
 	}
 	if count >= f.promotionPages {
-		if err := f.parserStore.PromoteToStable(ctx, bucketID); err != nil {
-			slog.Warn("promote bucket failed", "parser_id", bucketID, "err", err)
+		if err := f.parserStore.PromoteToStable(ctx, parserID); err != nil {
+			slog.Warn("promote parser failed", "parser_id", parserID, "err", err)
 		}
 	}
 
-	if err := f.corpus.Put(ctx, bucketID, index, pageURL, html); err != nil {
+	if err := f.corpus.Put(ctx, hostname, parserID, index, pageURL, html); err != nil {
 		return "", err
 	}
 
+	f.recordDecision(ctx, decisionInput{
+		url:      pageURL,
+		hostname: hostname,
+		tokens:   tokens,
+		shape:    shape,
+		route:    route,
+		index:    index,
+	})
+
 	if count >= f.minPages {
-		f.runner.Trigger(ctx, bucketID)
+		f.runner.Trigger(ctx, parserID)
 	}
-	return bucketID, nil
+	return parserID, nil
 }
 
-// Force lets the caller manually trigger a known bucket regardless of count.
+type decisionInput struct {
+	url      string
+	hostname string
+	tokens   []string
+	shape    core.Shape
+	route    routeResult
+	index    int
+}
+
+// recordDecision persists the routing audit row. Best-effort: a write
+// failure logs but doesn't fail the Feed call — the user already has their
+// page accepted, and the audit log is a secondary artifact.
+func (f *FunctionFeeder) recordDecision(ctx context.Context, d decisionInput) {
+	outcome := models.OutcomeMatched
+	if d.route.created {
+		outcome = models.OutcomeCreated
+	}
+	dec := &models.FeedDecision{
+		At:       time.Now().UTC(),
+		URL:      d.url,
+		Hostname: d.hostname,
+		Tokens:   d.tokens,
+		Shape: models.ShapeSummary{
+			PathCount: len(d.shape.Paths),
+			MarkCount: len(d.shape.Marks),
+		},
+		Threshold:  f.threshold,
+		Candidates: d.route.candidates,
+		Outcome:    outcome,
+		ParserID:   d.route.parserID,
+		PageIndex:  d.index,
+	}
+	if err := f.feedStore.Insert(ctx, dec); err != nil {
+		slog.Warn("record feed decision failed", "parser_id", d.route.parserID, "err", err)
+	}
+}
+
+// Force lets the caller manually trigger a known parser, bypassing the
+// safety guards (new-pages, failed-status circuit breaker) that gate
+// auto-triggers from the feed path.
 func (f *FunctionFeeder) Force(ctx context.Context, parserID string) {
-	f.runner.Trigger(ctx, parserID)
+	f.runner.Force(ctx, parserID)
 }
 
-// routeToBucket picks the best-matching bucket for (hostname, tokens, shape)
-// or creates a new one. Returns the bucket id and whether it was newly created.
-func (f *FunctionFeeder) routeToBucket(
+// routeResult bundles the chosen parser with the full candidate scoreboard
+// so callers (specifically: the decision recorder) can persist *why* the
+// page landed where it did, not just where.
+type routeResult struct {
+	parserID   string
+	created    bool
+	candidates []models.FeedCandidate
+}
+
+// routeToParser picks the best-matching parser for (hostname, shape) or
+// creates a new one. URL path tokens are not part of the match — same host
+// + similar enough shape is enough.
+//
+// Every parser on the hostname is scored regardless of whether it clears
+// the threshold; the full table is returned so the audit trail records
+// near-misses too.
+//
+// The url_tokens stored on the chosen parser are still updated to converge
+// toward wildcards across pages whose path lengths happen to align; this is
+// purely cosmetic, for the pattern column in the UI.
+func (f *FunctionFeeder) routeToParser(
 	ctx context.Context,
 	hostname string,
 	tokens []string,
 	shape core.Shape,
-) (string, bool, error) {
+) (routeResult, error) {
 	muIface, _ := f.hostMu.LoadOrStore(hostname, &sync.Mutex{})
 	mu := muIface.(*sync.Mutex)
 	mu.Lock()
@@ -145,71 +218,92 @@ func (f *FunctionFeeder) routeToBucket(
 
 	all, err := f.parserStore.FindByHostname(ctx, hostname)
 	if err != nil {
-		return "", false, fmt.Errorf("find buckets: %w", err)
+		return routeResult{}, fmt.Errorf("find parsers: %w", err)
 	}
 
-	// URL-token pre-filter: same hostname, same segment count, identical
-	// static tokens. Single static-position mismatch (e.g. /users vs /products)
-	// disqualifies the candidate regardless of shape similarity.
-	var candidates []*models.ManifestDoc
+	candidates := make([]models.FeedCandidate, 0, len(all))
+	bestIdx := -1
 	for i := range all {
 		c := &all[i]
-		if c.URLSegCount == len(tokens) && tokensMatch(c.URLTokens, tokens) {
-			candidates = append(candidates, c)
-		}
-	}
-
-	var best *models.ManifestDoc
-	bestScore := 0.0
-	for _, c := range candidates {
 		score, err := scoreAgainstRefs(shape, c.ShapeRefs)
 		if err != nil {
-			return "", false, fmt.Errorf("score %s: %w", c.ID, err)
+			return routeResult{}, fmt.Errorf("score %s: %w", c.ID, err)
 		}
-		if score > bestScore {
-			best, bestScore = c, score
+		candidates = append(candidates, models.FeedCandidate{
+			ParserID:  c.ID,
+			Score:     score,
+			State:     string(c.State),
+			PageCount: c.PageCount,
+		})
+		if score >= f.threshold && (bestIdx < 0 || score > candidates[bestIdx].Score) {
+			bestIdx = len(candidates) - 1
 		}
 	}
 
-	if best != nil && bestScore >= f.threshold {
-		slog.Debug("matched existing bucket", "parser_id", best.ID, "score", bestScore)
-		return best.ID, false, nil
+	if bestIdx >= 0 {
+		candidates[bestIdx].Accepted = true
+		chosen := &all[bestIdx]
+		slog.Debug("matched existing parser",
+			"parser_id", chosen.ID,
+			"shape_score", candidates[bestIdx].Score)
+		if next := updatedPattern(chosen.URLTokens, tokens); !sameTokens(next, chosen.URLTokens) {
+			if err := f.parserStore.SetURLTokens(ctx, chosen.ID, next); err != nil {
+				slog.Warn("update url_tokens failed", "parser_id", chosen.ID, "err", err)
+			}
+		}
+		return routeResult{parserID: chosen.ID, created: false, candidates: candidates}, nil
 	}
 
-	bucketID := hostname + ":" + shape.ID
+	parserID := bson.NewObjectID().Hex()
 	doc := &models.ManifestDoc{
-		ID:          bucketID,
+		ID:          parserID,
 		Hostname:    hostname,
 		URLTokens:   tokens,
 		URLSegCount: len(tokens),
-		State:       models.BucketForming,
+		State:       models.ParserForming,
 		ShapeRefs:   []models.ShapeRef{},
 		Status:      models.StatusPending,
 		PageCount:   0,
 		CreatedAt:   time.Now().UTC(),
 	}
 	if err := f.parserStore.Save(ctx, doc); err != nil {
-		// Concurrent feeder won the race for the exact same shape — adopt it.
-		if mongo.IsDuplicateKeyError(err) {
-			return bucketID, false, nil
-		}
-		return "", false, fmt.Errorf("create bucket: %w", err)
+		return routeResult{}, fmt.Errorf("create parser: %w", err)
 	}
-	slog.Info("created bucket",
-		"parser_id", bucketID,
-		"tokens", tokens,
+	slog.Info("created parser",
+		"parser_id", parserID,
+		"hostname", hostname,
 		"path_count", len(shape.Paths),
 		"mark_count", len(shape.Marks))
-	return bucketID, true, nil
+	return routeResult{parserID: parserID, created: true, candidates: candidates}, nil
 }
 
-// scoreAgainstRefs returns the highest combined Jaccard between the new shape
-// and any of the bucket's captured references. Empty refs (brand-new bucket
-// before its first push) score 0.
+func sameTokens(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// scoreAgainstRefs returns the highest combined routing score between the
+// incoming shape and any of the parser's captured references.
+//
+// Paths use the looser max(jaccard, overlap) score — pages of the same
+// template often differ by optional blocks (reviews, recommendations) which
+// shows up as one path set being a near-subset of the other, killing
+// Jaccard but leaving overlap high. Marks stay Jaccard: the mark set is
+// already a constrained, semantic-anchor set, so size-mismatch noise is
+// less of an issue there.
+//
+// Empty refs (brand-new parser before its first push) score 0.
 func scoreAgainstRefs(shape core.Shape, refs []models.ShapeRef) (float64, error) {
 	best := 0.0
 	for _, r := range refs {
-		ps, err := core.ShapeJaccard(shape.Paths, r.Paths)
+		ps, err := core.ShapeSimilarity(shape.Paths, r.Paths)
 		if err != nil {
 			return 0, err
 		}

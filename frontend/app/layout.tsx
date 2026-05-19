@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { StoreProvider } from "./lib/store";
+import { QueryProvider } from "./lib/query-provider";
 import { AppShell } from "./components/app-shell";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" });
@@ -19,9 +20,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${jetbrainsMono.variable}`}>
       <body>
-        <StoreProvider>
-          <AppShell>{children}</AppShell>
-        </StoreProvider>
+        <QueryProvider>
+          <StoreProvider>
+            <AppShell>{children}</AppShell>
+          </StoreProvider>
+        </QueryProvider>
       </body>
     </html>
   );

@@ -15,19 +15,22 @@ const SYSTEM_PROMPT: &str = r#"You are a content structure analyzer. You receive
 
 Your task:
 1. Identify meaningful content zones (title, price, description, author, date, image, etc.)
-2. For each zone, return a label and the gen_id of the node that contains it
+2. For each zone, return a label, the gen_id of the node, and a one-sentence rationale explaining *why* that node represents the label (consistent class, semantic position, recurring pattern across pages, etc.)
 3. Identify clusters of gen_ids that represent similar/repeated content (e.g., list items, product cards) with a similarity score (0.0-1.0)
 
 Rules:
 - Labels should be snake_case descriptive names (e.g., "article_title", "product_price", "author_name")
 - Only identify content that would be useful to extract — skip navigation, boilerplate, ads
+- Rationales should be brief (<= 200 chars), evidence-based, and reference what makes the choice stable
 - For clusters, group nodes that serve the same structural role across the page
 - NEVER generate CSS selectors — only return gen_ids
 
 Respond in JSON format:
 {
-  "labels": [{"label": "article_title", "gen_id": "n_abc123"}, ...],
-  "clusters": [{"gen_ids": ["n_abc", "n_def"], "similarity": 0.85}, ...]
+  "labels": [
+    {"label": "article_title", "gen_id": "n_abc123", "rationale": "h1 inside <article>, class 'product-title' appears in all sampled pages."}
+  ],
+  "clusters": [{"gen_ids": ["n_abc", "n_def"], "similarity": 0.85}]
 }"#;
 
 pub fn call_ai(documents: &[SemanticDocument], config: &Config) -> Result<AiResponse> {
@@ -58,6 +61,7 @@ pub(crate) fn parse_ai_text(text: &str) -> Result<AiResponse> {
                     Some(AiLabelResult {
                         label: v["label"].as_str()?.to_string(),
                         gen_id: v["gen_id"].as_str()?.to_string(),
+                        rationale: v["rationale"].as_str().unwrap_or("").to_string(),
                     })
                 })
                 .collect()

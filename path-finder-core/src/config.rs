@@ -22,6 +22,10 @@ pub struct Config {
     pub exclusions: Vec<String>,
     pub min_pages: usize,
     pub ai: AiConfig,
+    /// Optional path the pipeline atomically writes stage progress to. Empty
+    /// means "don't track" — used in tests and CLI invocations where no
+    /// UI is watching.
+    pub progress_path: String,
 }
 
 impl Default for Config {
@@ -30,6 +34,7 @@ impl Default for Config {
             max_direct_kb: 300, top_n_nodes: 30, max_sentences: 3, max_sentence_chars: 500,
             similarity_threshold: 0.75, max_retries: 3, output_format: Format::Json,
             exclusions: vec![], min_pages: 2, ai: AiConfig::default(),
+            progress_path: String::new(),
         }
     }
 }

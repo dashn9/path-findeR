@@ -13,15 +13,15 @@ import (
 	"time"
 )
 
-// LocalCorpusStore persists pages to a local directory. Layout mirrors S3,
-// with the bucket ID's colon expanded into a directory split so paths stay
-// Windows-safe:
+// LocalCorpusStore persists pages to a local directory. Layout:
 //
-//	<base>/<host>/<shape>/<index>.html        raw HTML
-//	<base>/<host>/<shape>/<index>.url         source URL (one line, UTF-8)
+//	<base>/<hostname>/<parser_id>/<index>.html        raw HTML
+//	<base>/<hostname>/<parser_id>/<index>.url         source URL (one line, UTF-8)
 //
-// The url sidecar replaces S3 object metadata. mtime on the html file is the
-// authoritative "page was written at" timestamp.
+// Grouping by hostname first makes the on-disk tree browsable by site.
+// parser_id is a Mongo ObjectID hex string — filename-safe on every OS.
+// The url sidecar replaces S3 object metadata; mtime on the html file is
+// the authoritative "page was written at" timestamp.
 type LocalCorpusStore struct {
 	base string
 }
@@ -36,13 +36,12 @@ func NewLocalCorpusStore(base string) (*LocalCorpusStore, error) {
 	return &LocalCorpusStore{base: base}, nil
 }
 
-// bucketDir resolves a bucket ID ("host:shape") to its on-disk directory.
-func (s *LocalCorpusStore) bucketDir(bucketID string) string {
-	return filepath.Join(s.base, filepath.FromSlash(strings.ReplaceAll(bucketID, ":", "/")))
+func (s *LocalCorpusStore) parserDir(hostname, parserID string) string {
+	return filepath.Join(s.base, hostname, parserID)
 }
 
-func (s *LocalCorpusStore) Put(ctx context.Context, bucketID string, index int, url, html string) error {
-	dir := s.bucketDir(bucketID)
+func (s *LocalCorpusStore) Put(ctx context.Context, hostname, parserID string, index int, url, html string) error {
+	dir := s.parserDir(hostname, parserID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -55,8 +54,8 @@ func (s *LocalCorpusStore) Put(ctx context.Context, bucketID string, index int, 
 	return writeAtomic(urlPath, []byte(url))
 }
 
-func (s *LocalCorpusStore) GetAll(ctx context.Context, bucketID string) ([]Page, error) {
-	dir := s.bucketDir(bucketID)
+func (s *LocalCorpusStore) GetAll(ctx context.Context, hostname, parserID string) ([]Page, error) {
+	dir := s.parserDir(hostname, parserID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -97,8 +96,8 @@ func (s *LocalCorpusStore) GetAll(ctx context.Context, bucketID string) ([]Page,
 	return pages, nil
 }
 
-func (s *LocalCorpusStore) HasPagesNewerThan(ctx context.Context, bucketID string, t time.Time) (bool, error) {
-	dir := s.bucketDir(bucketID)
+func (s *LocalCorpusStore) HasPagesNewerThan(ctx context.Context, hostname, parserID string, t time.Time) (bool, error) {
+	dir := s.parserDir(hostname, parserID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -121,8 +120,41 @@ func (s *LocalCorpusStore) HasPagesNewerThan(ctx context.Context, bucketID strin
 	return false, nil
 }
 
-func (s *LocalCorpusStore) Delete(ctx context.Context, bucketID string) error {
-	dir := s.bucketDir(bucketID)
+func (s *LocalCorpusStore) List(ctx context.Context, hostname, parserID string) ([]PageMeta, error) {
+	dir := s.parserDir(hostname, parserID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []PageMeta
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
+			continue
+		}
+		idx, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".html"))
+		if err != nil {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		urlBytes, _ := os.ReadFile(filepath.Join(dir, fmt.Sprintf("%d.url", idx)))
+		out = append(out, PageMeta{
+			URL:       strings.TrimSpace(string(urlBytes)),
+			Index:     idx,
+			FetchedAt: info.ModTime().UTC(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	return out, nil
+}
+
+func (s *LocalCorpusStore) Delete(ctx context.Context, hostname, parserID string) error {
+	dir := s.parserDir(hostname, parserID)
 	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", dir, err)
 	}
