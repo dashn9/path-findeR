@@ -48,21 +48,21 @@ pub fn build_selectors(
             Some(n) => *n,
             None => continue,
         };
-        let parent = node
-            .parent
-            .as_deref()
-            .and_then(|pid| gen_id_to_node.get(pid).copied());
 
-        // is_array purely from AI clusters. The old "any selector matches
-        // more than one element" heuristic flipped non-array labels to
-        // array whenever a broad utility class snuck in — exactly the
-        // failure mode the compound-selector approach is here to fix.
-        let array = ai_response.clusters.iter().any(|c| {
-            c.similarity >= config.similarity_threshold
-                && c.gen_ids.contains(&label_result.gen_id)
-        });
+        // is_array: the gen_id itself OR any of its ancestors is in a
+        // repeating cluster. Direct membership covers things like
+        // <article> tiles; ancestor membership covers nested items —
+        // a swiper carousel's <img>s aren't direct cluster members, but
+        // their grandparent .swiper-slide divs are, and one image per
+        // slide is structurally an array.
+        let array = is_in_cluster(
+            &label_result.gen_id,
+            &gen_id_to_node,
+            &ai_response.clusters,
+            config.similarity_threshold,
+        );
 
-        let css_candidates = derive_selectors(node, parent, pages, &docs, array);
+        let css_candidates = derive_selectors(node, &gen_id_to_node, pages, &docs, array);
 
         candidates.push(SelectorCandidate {
             label: label_result.label.clone(),
@@ -73,15 +73,51 @@ pub fn build_selectors(
     candidates
 }
 
-/// Generate candidate selectors and rank them by selectivity.
+/// True iff `gen_id` (or any of its ancestors within 8 hops) is a member of
+/// a high-similarity cluster. Lifts array detection past direct-membership
+/// — nested items inside repeating containers count.
+fn is_in_cluster(
+    gen_id: &str,
+    nodes: &HashMap<&str, &ParsedNode>,
+    clusters: &[crate::types::AiCluster],
+    threshold: f32,
+) -> bool {
+    let is_member = |id: &str| {
+        clusters.iter().any(|c| {
+            c.similarity >= threshold && c.gen_ids.iter().any(|g| g == id)
+        })
+    };
+    if is_member(gen_id) {
+        return true;
+    }
+    let mut current = gen_id.to_string();
+    for _ in 0..8 {
+        let parent = match nodes.get(current.as_str()).and_then(|n| n.parent.as_deref()) {
+            Some(p) => p.to_string(),
+            None => return false,
+        };
+        if is_member(&parent) {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// Generate candidate selectors and rank by per-page match count.
 ///
-/// For non-array labels: most-selective (low match count, ideally 1) wins.
-/// For array labels: also rank low → high, but the validator's coverage
-/// logic in `validator.rs` will still accept multi-match selectors that
-/// cover all pages — the ordering just determines which one it tries first.
+/// For non-array labels the ideal selector matches exactly one element. When
+/// the best class-based candidate still matches several (three siblings
+/// sharing the same compound, say), `:nth-of-type(N)` variants tighten
+/// further — the AI's gen_id is at a fixed position within its sibling set
+/// on every page, so the positional form selects exactly the right one.
+///
+/// For array labels we let the validator's coverage logic handle multi-
+/// match acceptance; ranking still prefers lower mean counts so we don't
+/// accidentally pick a selector that scoops in unrelated elements.
 fn derive_selectors(
     node: &ParsedNode,
-    parent: Option<&ParsedNode>,
+    nodes: &HashMap<&str, &ParsedNode>,
     pages: &[ParsedPage],
     docs: &[Html],
     array: bool,
@@ -103,50 +139,70 @@ fn derive_selectors(
         })
         .unwrap_or_default();
 
-    let parent_classes: Vec<&str> = parent
-        .and_then(|p| p.attributes.get("class"))
-        .map(|c| {
-            c.split_whitespace()
-                .filter(|cls| is_usable_class(cls))
-                .collect()
-        })
-        .unwrap_or_default();
+    // Walk up to 4 ancestors collecting their usable classes. Nearest first.
+    // Lets us scope a broad bare class under any ancestor class that's
+    // actually meaningful (a `.swiper-wrapper` two hops up, etc.) instead
+    // of only the immediate parent.
+    let ancestor_classes = ancestor_classes(node, nodes, 4);
 
-    // Multi-class compound (`.c1.c2.c3`). Intersecting every stable class
-    // the node carries is usually the most-specific class-only form.
+    // Multi-class compound — most-specific class-only form for this node.
     if own_classes.len() >= 2 {
         let compound: String = own_classes.iter().map(|c| format!(".{c}")).collect();
         out.push(Selector { css: compound });
     }
 
-    // Tag + each individual class (`h1.font-bodyTitleSmall`). Narrower than
-    // the bare class because the tag filters out non-`h1` matches.
+    // Tag + each individual class (`h1.font-bodyTitleSmall`).
     for cls in &own_classes {
         out.push(Selector { css: format!("{}.{cls}", node.tag) });
     }
 
-    // Parent-scoped (`.parentClass > tag.cls`, `.parentClass .cls`). When
-    // the bare class is too broad, scoping it under a parent class usually
-    // pins it down. We emit a few combinations; ranking weeds the bad ones.
-    for pcls in &parent_classes {
+    // Ancestor-scoped (`.ancestor tag.cls`, `.ancestor > tag.cls` for
+    // immediate parent). Nearest ancestor first — those win when they're
+    // specific enough; broader scope falls in behind.
+    for (depth, acls) in ancestor_classes.iter().enumerate() {
         for cls in &own_classes {
-            out.push(Selector {
-                css: format!(".{pcls} > {}.{cls}", node.tag),
-            });
-            out.push(Selector { css: format!(".{pcls} .{cls}") });
+            out.push(Selector { css: format!(".{acls} {}.{cls}", node.tag) });
+            if depth == 0 {
+                out.push(Selector { css: format!(".{acls} > {}.{cls}", node.tag) });
+                out.push(Selector { css: format!(".{acls} > .{cls}") });
+            }
+            out.push(Selector { css: format!(".{acls} .{cls}") });
         }
-        out.push(Selector { css: format!(".{pcls} > {}", node.tag) });
+        out.push(Selector { css: format!(".{acls} {}", node.tag) });
+        if depth == 0 {
+            out.push(Selector { css: format!(".{acls} > {}", node.tag) });
+        }
     }
 
-    // Bare class candidates (least specific; ranking surfaces them only when
-    // they're actually unique — e.g. when no compound is available).
+    // Bare class — last among class-only forms; ranking promotes when truly
+    // unique (rare on real sites, but cheap to keep).
     for cls in &own_classes {
         out.push(Selector { css: format!(".{cls}") });
     }
 
-    // Structural path (`main > article > h1`). The fallback when the node
-    // has no useful classes; usually too generic to win the ranking but
-    // safe.
+    // Positional disambiguation: when N siblings share the same tag, the
+    // AI's target is at a known position. Pair `:nth-of-type(N)` with the
+    // ancestor scope so the selector reads "Nth h2 inside .container".
+    // Critical for "three section headings all share class X" — class alone
+    // matches all three; the position picks the right one.
+    if let Some(n) = nth_of_type(node, nodes) {
+        out.push(Selector { css: format!("{}:nth-of-type({n})", node.tag) });
+        for acls in &ancestor_classes {
+            out.push(Selector {
+                css: format!(".{acls} > {}:nth-of-type({n})", node.tag),
+            });
+            out.push(Selector {
+                css: format!(".{acls} {}:nth-of-type({n})", node.tag),
+            });
+            for cls in &own_classes {
+                out.push(Selector {
+                    css: format!(".{acls} {}.{cls}:nth-of-type({n})", node.tag),
+                });
+            }
+        }
+    }
+
+    // Structural path fallback.
     let path = build_structural_path(node, pages);
     if !path.is_empty() {
         out.push(Selector { css: path });
@@ -155,18 +211,13 @@ fn derive_selectors(
     // Tag-only — last resort.
     out.push(Selector { css: node.tag.clone() });
 
-    // De-dupe identical CSS strings before scoring so we don't pay the parse
-    // cost twice for the same selector.
+    // De-dupe.
     let mut seen: HashSet<String> = HashSet::new();
     out.retain(|s| seen.insert(s.css.clone()));
 
-    // Score each candidate by mean per-page match count. Ascending order:
-    //   - non-array: freq=1 is ideal (uniquely identifies the target).
-    //   - array:    coverage logic in validator handles multi-match; we still
-    //               prefer lower variance, which low-mean candidates trend
-    //               toward.
-    // freq=0 candidates (selector doesn't match anywhere) sink to the bottom
-    // by promoting them to the largest possible key — useless picks.
+    // Rank by mean match count. usize::MAX sinks unparseable / zero-match
+    // selectors. For non-array labels a mean of 1 is ideal; for array labels
+    // we still prefer lower means (selector picks fewer extras).
     let mut scored: Vec<(usize, Selector)> = out
         .into_iter()
         .map(|s| {
@@ -177,8 +228,64 @@ fn derive_selectors(
         .collect();
     scored.sort_by_key(|(k, _)| *k);
 
-    let _ = array; // reserved for future array-aware ordering tweaks
+    let _ = array;
     scored.into_iter().map(|(_, s)| s).collect()
+}
+
+/// Walks up to `max_depth` ancestors and returns their usable classes,
+/// nearest first. Order matters: closer scopes are emitted as candidates
+/// before broader ones so the ranking sees the most-specific options first.
+fn ancestor_classes<'a>(
+    node: &'a ParsedNode,
+    nodes: &HashMap<&str, &'a ParsedNode>,
+    max_depth: usize,
+) -> Vec<&'a str> {
+    let mut out: Vec<&'a str> = Vec::new();
+    let mut current = node;
+    for _ in 0..max_depth {
+        let parent_id = match current.parent.as_deref() {
+            Some(p) => p,
+            None => break,
+        };
+        let parent = match nodes.get(parent_id) {
+            Some(p) => *p,
+            None => break,
+        };
+        if let Some(cls) = parent.attributes.get("class") {
+            for c in cls.split_whitespace() {
+                if is_usable_class(c) && !out.contains(&c) {
+                    out.push(c);
+                }
+            }
+        }
+        current = parent;
+    }
+    out
+}
+
+/// Position of `node` among its same-tag siblings (1-based). Returns None
+/// when the node has no parent recorded or is a unique-of-its-tag among
+/// siblings — in the latter case the tag selector alone is already unique
+/// and `:nth-of-type` adds no value.
+fn nth_of_type(node: &ParsedNode, nodes: &HashMap<&str, &ParsedNode>) -> Option<usize> {
+    let parent_id = node.parent.as_deref()?;
+    let parent = nodes.get(parent_id)?;
+    let mut n = 0usize;
+    let mut total = 0usize;
+    for child_id in &parent.children {
+        let child = match nodes.get(child_id.as_str()) {
+            Some(c) => c,
+            None => continue,
+        };
+        if child.tag != node.tag {
+            continue;
+        }
+        total += 1;
+        if child.gen_id == node.gen_id {
+            n = total;
+        }
+    }
+    if total >= 2 && n > 0 { Some(n) } else { None }
 }
 
 /// Mean number of elements matching `css` across the corpus. usize::MAX
