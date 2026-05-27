@@ -4,9 +4,9 @@ use crate::error::{PathFinderError, Result};
 use crate::types::UrlPattern;
 
 pub fn detect_url_pattern(urls: &[&str]) -> Result<(UrlPattern, Vec<Vec<String>>)> {
-    if urls.len() < 2 {
+    if urls.is_empty() {
         return Err(PathFinderError::InsufficientPages {
-            min: 2,
+            min: 1,
             got: urls.len(),
         });
     }
@@ -109,8 +109,17 @@ mod tests {
     }
 
     #[test]
-    fn test_insufficient_pages() {
+    fn test_single_page_static_pattern() {
         let urls = ["example.com/page"];
+        let (pat, vals) = detect_url_pattern(&urls).unwrap();
+        assert_eq!(pat.host, "example.com");
+        assert_eq!(pat.pattern, "/page");
+        assert_eq!(vals, vec![Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn test_empty_input_rejected() {
+        let urls: [&str; 0] = [];
         assert!(detect_url_pattern(&urls).is_err());
     }
 

@@ -7,6 +7,17 @@ pub enum Format {
     Toml,
 }
 
+/// One field the caller wants the LLM to find. When at least one
+/// `SchemaField` is provided in [`Config::schema`], the AI prompt is rewritten
+/// to extract *exactly* these labels (snake_case names) instead of letting
+/// the model freely pick zones. Empty `schema` keeps the legacy autonomous
+/// behaviour.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaField {
+    pub name: String,
+    pub description: String,
+}
+
 /// Pipeline config — crosses the FFI as JSON. Mirror field changes in the Go
 /// `internal/core/bridge.go` payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +37,9 @@ pub struct Config {
     /// means "don't track" — used in tests and CLI invocations where no
     /// UI is watching.
     pub progress_path: String,
+    /// User-supplied extraction schema. When non-empty the AI is constrained
+    /// to these field names + descriptions instead of free-discovery.
+    pub schema: Vec<SchemaField>,
 }
 
 impl Default for Config {
@@ -33,14 +47,15 @@ impl Default for Config {
         Self {
             max_direct_kb: 300, top_n_nodes: 30, max_sentences: 3, max_sentence_chars: 500,
             similarity_threshold: 0.75, max_retries: 3, output_format: Format::Json,
-            exclusions: vec![], min_pages: 2, ai: AiConfig::default(),
+            exclusions: vec![], min_pages: 1, ai: AiConfig::default(),
             progress_path: String::new(),
+            schema: Vec::new(),
         }
     }
 }
 
 impl Config {
-    pub fn effective_min_pages(&self) -> usize { self.min_pages.max(2) }
+    pub fn effective_min_pages(&self) -> usize { self.min_pages.max(1) }
 }
 
 /// `adapter` picks which nested struct the dispatcher reads.

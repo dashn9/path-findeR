@@ -153,6 +153,8 @@ mod tests {
             exclusions: vec![],
             min_pages: 2,
             ai: Default::default(),
+            progress_path: String::new(),
+            schema: Vec::new(),
         };
         let tree = analyze(&page, &config);
         assert_eq!(tree.nodes.len(), 1);
@@ -175,6 +177,8 @@ mod tests {
             exclusions: vec![],
             min_pages: 2,
             ai: Default::default(),
+            progress_path: String::new(),
+            schema: Vec::new(),
         };
         let tree = analyze(&page, &config);
         assert!(tree.nodes[0].tag == "h1");

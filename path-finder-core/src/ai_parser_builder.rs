@@ -6,12 +6,12 @@
 //! `(label, gen_id)` pairs and similarity clusters.
 
 use crate::ai::AiService;
-use crate::config::Config;
+use crate::config::{Config, SchemaField};
 use crate::error::{PathFinderError, Result};
 use crate::semantic::{format_semantic_doc, SemanticDocument};
 use crate::types::{AiCluster, AiLabelResult, AiResponse};
 
-const SYSTEM_PROMPT: &str = r#"You are a content structure analyzer. You receive HTML pages or semantic document representations and identify distinct content zones.
+const FREE_DISCOVERY_PROMPT: &str = r#"You are a content structure analyzer. You receive HTML pages or semantic document representations and identify distinct content zones.
 
 Your task:
 1. Identify meaningful content zones (title, price, description, author, date, image, etc.)
@@ -33,6 +33,45 @@ Respond in JSON format:
   "clusters": [{"gen_ids": ["n_abc", "n_def"], "similarity": 0.85}]
 }"#;
 
+/// build_system_prompt returns the schema-constrained variant when the caller
+/// supplied at least one [`SchemaField`]; otherwise the free-discovery prompt.
+fn build_system_prompt(schema: &[SchemaField]) -> String {
+    if schema.is_empty() {
+        return FREE_DISCOVERY_PROMPT.to_string();
+    }
+
+    let mut s = String::from(
+        "You are a content structure analyzer. You receive HTML pages or semantic document representations and locate specific fields the caller asked for.\n\n",
+    );
+    s.push_str("Extract EXACTLY the following fields, no more and no less. Use these exact label names (do not rename, translate, or add new labels):\n\n");
+    for f in schema {
+        if f.description.trim().is_empty() {
+            s.push_str(&format!("- {}\n", f.name));
+        } else {
+            s.push_str(&format!("- {} — {}\n", f.name, f.description));
+        }
+    }
+    s.push_str(
+        r#"
+For each requested field, return a label (the exact name above), the gen_id of the node that represents it, and a one-sentence rationale (<= 200 chars).
+
+If a field genuinely does not exist on the page, OMIT it from the labels array rather than guessing. Do not invent labels that are not on the list above.
+
+Also return clusters of gen_ids that represent repeated content (lists, grids, cards) with a similarity score (0.0-1.0). Clusters are independent of the requested schema.
+
+NEVER generate CSS selectors — only return gen_ids.
+
+Respond in JSON format:
+{
+  "labels": [
+    {"label": "<one of the names above>", "gen_id": "n_abc123", "rationale": "h1 inside <article>, class 'product-title'."}
+  ],
+  "clusters": [{"gen_ids": ["n_abc", "n_def"], "similarity": 0.85}]
+}"#,
+    );
+    s
+}
+
 pub fn call_ai(documents: &[SemanticDocument], config: &Config) -> Result<AiResponse> {
     let mut content = String::new();
     for (i, doc) in documents.iter().enumerate() {
@@ -42,7 +81,8 @@ pub fn call_ai(documents: &[SemanticDocument], config: &Config) -> Result<AiResp
     }
 
     let service = AiService::new(&config.ai);
-    let raw = service.complete(SYSTEM_PROMPT, &content)?;
+    let system_prompt = build_system_prompt(&config.schema);
+    let raw = service.complete(&system_prompt, &content)?;
     parse_ai_text(&raw)
 }
 
@@ -129,6 +169,24 @@ mod tests {
         let parsed = parse_ai_text(text).unwrap();
         assert_eq!(parsed.labels.len(), 1);
         assert_eq!(parsed.labels[0].label, "title");
+    }
+
+    #[test]
+    fn system_prompt_free_discovery_when_schema_empty() {
+        let s = build_system_prompt(&[]);
+        assert!(s.contains("Identify meaningful content zones"));
+    }
+
+    #[test]
+    fn system_prompt_includes_schema_fields() {
+        let schema = vec![
+            SchemaField { name: "title".into(), description: "the article heading".into() },
+            SchemaField { name: "price".into(), description: String::new() },
+        ];
+        let s = build_system_prompt(&schema);
+        assert!(s.contains("title — the article heading"));
+        assert!(s.contains("- price\n"));
+        assert!(s.contains("OMIT it"));
     }
 
     #[test]

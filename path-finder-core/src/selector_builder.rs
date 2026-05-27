@@ -55,7 +55,7 @@ pub fn build_selectors(
         // a swiper carousel's <img>s aren't direct cluster members, but
         // their grandparent .swiper-slide divs are, and one image per
         // slide is structurally an array.
-        let array = is_in_cluster(
+        let mut array = is_in_cluster(
             &label_result.gen_id,
             &gen_id_to_node,
             &ai_response.clusters,
@@ -63,6 +63,18 @@ pub fn build_selectors(
         );
 
         let css_candidates = derive_selectors(node, &gen_id_to_node, pages, &docs, array);
+
+        // Fallback array detection: even without a cluster signal, when the
+        // most-specific selector still matches multiple elements per page,
+        // the label is structurally repeating (e.g. `<li class="item">` rows
+        // where no two-of-a-kind cluster was emitted).
+        if !array {
+            if let Some(top) = css_candidates.first() {
+                if mean_match_count(&top.css, &docs) >= 2 {
+                    array = true;
+                }
+            }
+        }
 
         candidates.push(SelectorCandidate {
             label: label_result.label.clone(),

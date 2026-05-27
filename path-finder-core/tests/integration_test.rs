@@ -21,6 +21,8 @@ fn test_config() -> Config {
         exclusions: vec![],
         min_pages: 2,
         ai: Default::default(),
+        progress_path: String::new(),
+        schema: Vec::new(),
     }
 }
 
@@ -65,9 +67,12 @@ fn url_pattern_multiple_dynamic_segments() {
 }
 
 #[test]
-fn url_pattern_rejects_single_page() {
+fn url_pattern_single_page_is_fully_static() {
     let urls = ["example.com/only-one"];
-    assert!(detect_url_pattern(&urls).is_err());
+    let (pat, vals) = detect_url_pattern(&urls).unwrap();
+    assert_eq!(pat.host, "example.com");
+    assert_eq!(pat.pattern, "/only-one");
+    assert!(vals[0].is_empty());
 }
 
 #[test]
@@ -399,7 +404,7 @@ fn semantic_squash_limits_sentences() {
 #[test]
 fn selector_id_based() {
     let ai_resp = AiResponse {
-        labels: vec![AiLabelResult { label: "title".into(), gen_id: "n1".into() }],
+        labels: vec![AiLabelResult { label: "title".into(), gen_id: "n1".into(), rationale: String::new() }],
         clusters: vec![],
     };
     let page = ParsedPage {
@@ -420,7 +425,7 @@ fn selector_id_based() {
 #[test]
 fn selector_class_based() {
     let ai_resp = AiResponse {
-        labels: vec![AiLabelResult { label: "price".into(), gen_id: "n1".into() }],
+        labels: vec![AiLabelResult { label: "price".into(), gen_id: "n1".into(), rationale: String::new() }],
         clusters: vec![],
     };
     let page = ParsedPage {
@@ -441,7 +446,7 @@ fn selector_class_based() {
 #[test]
 fn selector_array_detection_multi_match() {
     let ai_resp = AiResponse {
-        labels: vec![AiLabelResult { label: "items".into(), gen_id: "n1".into() }],
+        labels: vec![AiLabelResult { label: "items".into(), gen_id: "n1".into(), rationale: String::new() }],
         clusters: vec![],
     };
     let page = ParsedPage {
@@ -464,7 +469,7 @@ fn selector_array_detection_multi_match() {
 #[test]
 fn selector_array_detection_from_cluster() {
     let ai_resp = AiResponse {
-        labels: vec![AiLabelResult { label: "tag".into(), gen_id: "n1".into() }],
+        labels: vec![AiLabelResult { label: "tag".into(), gen_id: "n1".into(), rationale: String::new() }],
         clusters: vec![AiCluster { gen_ids: vec!["n1".into(), "n2".into()], similarity: 0.9 }],
     };
     let page = ParsedPage {
@@ -496,9 +501,9 @@ fn validator_passes_universal_selector() {
         ("u1".into(), "<html><body><h1>A</h1></body></html>".into()),
         ("u2".into(), "<html><body><h1>B</h1></body></html>".into()),
     ];
-    let results = validate_selectors(&candidates, &pages);
-    assert!(!results[0].unresolved);
-    assert_eq!(results[0].selectors.len(), 1);
+    let output = validate_selectors(&candidates, &pages);
+    assert!(!output.results[0].unresolved);
+    assert_eq!(output.results[0].selectors.len(), 1);
 }
 
 #[test]
@@ -511,8 +516,8 @@ fn validator_marks_unresolved_when_no_match() {
     let pages = vec![
         ("u".into(), "<html><body><p>Hello</p></body></html>".into()),
     ];
-    let results = validate_selectors(&candidates, &pages);
-    assert!(results[0].unresolved);
+    let output = validate_selectors(&candidates, &pages);
+    assert!(output.results[0].unresolved);
 }
 
 #[test]
@@ -529,9 +534,9 @@ fn validator_divergence_picks_best_coverage() {
         ("u1".into(), "<html><body><h1 class=\"title-v1\">A</h1></body></html>".into()),
         ("u2".into(), "<html><body><h1 class=\"title-v2\">B</h1></body></html>".into()),
     ];
-    let results = validate_selectors(&candidates, &pages);
-    assert!(!results[0].unresolved);
-    assert_eq!(results[0].selectors.len(), 2);
+    let output = validate_selectors(&candidates, &pages);
+    assert!(!output.results[0].unresolved);
+    assert_eq!(output.results[0].selectors.len(), 2);
 }
 
 #[test]
@@ -553,8 +558,10 @@ fn validator_handle_selector_divergence_filters_dead() {
 #[test]
 fn config_effective_min_pages_enforces_floor() {
     let mut cfg = test_config();
+    cfg.min_pages = 0;
+    assert_eq!(cfg.effective_min_pages(), 1);
     cfg.min_pages = 1;
-    assert_eq!(cfg.effective_min_pages(), 2);
+    assert_eq!(cfg.effective_min_pages(), 1);
     cfg.min_pages = 5;
     assert_eq!(cfg.effective_min_pages(), 5);
 }
@@ -588,6 +595,7 @@ fn parser_manifest_serde() {
                 unresolved: false,
             },
         )]),
+        trace: Default::default(),
     };
     let json = serde_json::to_string_pretty(&manifest).unwrap();
     let parsed: ParserManifest = serde_json::from_str(&json).unwrap();
