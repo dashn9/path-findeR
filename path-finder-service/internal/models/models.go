@@ -86,6 +86,10 @@ type ManifestDoc struct {
 	Error           *string                `json:"error,omitempty" bson:"error,omitempty"`
 	URLPattern      map[string]interface{} `json:"url_pattern,omitempty" bson:"url_pattern,omitempty"`
 	Parser          map[string]interface{} `json:"parser,omitempty" bson:"parser,omitempty"`
+	// Schema is the user-supplied extraction target list captured on first
+	// Feed. Frozen for the parser's lifetime — re-fed pages cannot redefine
+	// it. Empty when the parser was created without a schema (free-discovery).
+	Schema          []SchemaField          `json:"schema,omitempty" bson:"schema,omitempty"`
 	// Trace is the Inspector's per-label payload: candidate scoreboard,
 	// validation matrix, extracted values, DOM context, AI rationale.
 	// Loosely typed so we can ship Rust shape changes without a schema
@@ -97,11 +101,24 @@ type ManifestDoc struct {
 	Progress *ProgressView `json:"progress,omitempty" bson:"-"`
 }
 
+// SchemaField is one extraction target the caller wants the LLM to find.
+// Mirrors `config::SchemaField` on the Rust side. Sent on the first Feed for
+// a brand-new parser to fix its schema; rejected on subsequent feeds that
+// match an existing parser (the schema is owned by the parser, not the page).
+type SchemaField struct {
+	Name        string `json:"name" bson:"name"`
+	Description string `json:"description" bson:"description"`
+}
+
 // FeedRequest pushes one page into the service. The destination parser is
-// decided server-side from (hostname, structural shape).
+// decided server-side from (hostname, structural shape). `Schema` is honored
+// only when the feed creates a new parser; if the page routes to an existing
+// parser, a non-empty Schema causes the request to fail (selectors already
+// exist for that URL — caller cannot redefine them).
 type FeedRequest struct {
-	URL  string `json:"url"`
-	HTML string `json:"html"`
+	URL    string        `json:"url"`
+	HTML   string        `json:"html"`
+	Schema []SchemaField `json:"schema,omitempty"`
 }
 
 // ForceRequest manually triggers a run for a known parser.

@@ -85,7 +85,12 @@ func NewFunctionFeeder(
 // Feed routes one (url, html) page to the matching parser (or creates one),
 // persists the page, records the routing decision, and triggers a run when
 // the parser reaches minPages.
-func (f *FunctionFeeder) Feed(ctx context.Context, pageURL, html string) (string, error) {
+//
+// `schema` is honored only when the routing produces a NEW parser. If the
+// page matches an existing parser, the supplied schema is dropped (the
+// parser already owns its extraction shape) — the feed otherwise succeeds
+// as normal and the drop is logged.
+func (f *FunctionFeeder) Feed(ctx context.Context, pageURL, html string, schema []models.SchemaField) (string, error) {
 	hostname, tokens, err := extractHostAndTokens(pageURL)
 	if err != nil {
 		return "", err
@@ -96,7 +101,7 @@ func (f *FunctionFeeder) Feed(ctx context.Context, pageURL, html string) (string
 		return "", fmt.Errorf("compute shape: %w", err)
 	}
 
-	route, err := f.routeToParser(ctx, hostname, tokens, shape)
+	route, err := f.routeToParser(ctx, hostname, tokens, shape, schema)
 	if err != nil {
 		return "", err
 	}
@@ -210,6 +215,7 @@ func (f *FunctionFeeder) routeToParser(
 	hostname string,
 	tokens []string,
 	shape core.Shape,
+	schema []models.SchemaField,
 ) (routeResult, error) {
 	muIface, _ := f.hostMu.LoadOrStore(hostname, &sync.Mutex{})
 	mu := muIface.(*sync.Mutex)
@@ -246,6 +252,15 @@ func (f *FunctionFeeder) routeToParser(
 		slog.Debug("matched existing parser",
 			"parser_id", chosen.ID,
 			"shape_score", candidates[bestIdx].Score)
+		// The parser's schema is frozen at creation; a schema sent on a
+		// later feed for the same URL is silently dropped. Logged so the
+		// caller can see in service logs why their override didn't apply.
+		if len(schema) > 0 {
+			slog.Info("dropped feed-supplied schema; parser already exists",
+				"parser_id", chosen.ID,
+				"hostname", hostname,
+				"dropped_field_count", len(schema))
+		}
 		if next := updatedPattern(chosen.URLTokens, tokens); !sameTokens(next, chosen.URLTokens) {
 			if err := f.parserStore.SetURLTokens(ctx, chosen.ID, next); err != nil {
 				slog.Warn("update url_tokens failed", "parser_id", chosen.ID, "err", err)
@@ -265,6 +280,7 @@ func (f *FunctionFeeder) routeToParser(
 		Status:      models.StatusPending,
 		PageCount:   0,
 		CreatedAt:   time.Now().UTC(),
+		Schema:      schema,
 	}
 	if err := f.parserStore.Save(ctx, doc); err != nil {
 		return routeResult{}, fmt.Errorf("create parser: %w", err)
@@ -273,7 +289,8 @@ func (f *FunctionFeeder) routeToParser(
 		"parser_id", parserID,
 		"hostname", hostname,
 		"path_count", len(shape.Paths),
-		"mark_count", len(shape.Marks))
+		"mark_count", len(shape.Marks),
+		"schema_field_count", len(schema))
 	return routeResult{parserID: parserID, created: true, candidates: candidates}, nil
 }
 

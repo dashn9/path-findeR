@@ -1,28 +1,25 @@
 package config
 
-// SchemaField is one extraction target the caller wants the LLM to find.
-// Mirrors `config::SchemaField` on the Rust side. When `PipelineConfig.Schema`
-// is non-empty, the Rust core's AI prompt is constrained to exactly these
-// names; an empty slice keeps the old free-discovery behaviour.
-type SchemaField struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
+import "github.com/user/path-finder-service/internal/models"
 
 // PipelineConfig is the subset that crosses the FFI to the Rust core. It only
 // holds knobs the pipeline cares about — credentials and storage endpoints are
 // resolved on the Go side and never travel over FFI.
+//
+// `Schema` is per-parser (loaded from the parser doc on each run) but kept on
+// PipelineConfig as the FFI envelope. The shared service-wide PipelineConfig
+// always carries an empty Schema; per-run callers clone-and-override it.
 type PipelineConfig struct {
-	MaxDirectKB         int           `json:"max_direct_kb"`
-	TopNNodes           int           `json:"top_n_nodes"`
-	MaxSentences        int           `json:"max_sentences"`
-	MaxSentenceChars    int           `json:"max_sentence_chars"`
-	SimilarityThreshold float64       `json:"similarity_threshold"`
-	MaxRetries          int           `json:"max_retries"`
-	OutputFormat        string        `json:"output_format"`
-	Exclusions          []string      `json:"exclusions"`
-	MinPages            int           `json:"min_pages"`
-	Schema              []SchemaField `json:"schema"`
+	MaxDirectKB         int                  `json:"max_direct_kb"`
+	TopNNodes           int                  `json:"top_n_nodes"`
+	MaxSentences        int                  `json:"max_sentences"`
+	MaxSentenceChars    int                  `json:"max_sentence_chars"`
+	SimilarityThreshold float64              `json:"similarity_threshold"`
+	MaxRetries          int                  `json:"max_retries"`
+	OutputFormat        string               `json:"output_format"`
+	Exclusions          []string             `json:"exclusions"`
+	MinPages            int                  `json:"min_pages"`
+	Schema              []models.SchemaField `json:"schema"`
 	// ShapeSimilarityThreshold gates which existing parser a freshly fed page
 	// joins. Stays Go-side (not forwarded to the Rust core).
 	ShapeSimilarityThreshold float64 `json:"-"`
@@ -43,7 +40,7 @@ func loadPipeline() PipelineConfig {
 		// Non-nil so JSON marshals as [] not null — the Rust core deserializes
 		// these fields as Vec and rejects null.
 		Exclusions:               []string{},
-		Schema:                   []SchemaField{},
+		Schema:                   []models.SchemaField{},
 		MinPages:                 getenvInt("PIPELINE_MIN_PAGES", 1),
 		ShapeSimilarityThreshold: getenvFloat("PIPELINE_SHAPE_SIMILARITY_THRESHOLD", 0.75),
 		RerunCooldownSeconds:     getenvInt("PIPELINE_RERUN_COOLDOWN_SECONDS", 60),

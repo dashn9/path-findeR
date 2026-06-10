@@ -112,7 +112,7 @@ func (h *Handlers) Feed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parserID, err := h.Feeder.Feed(r.Context(), req.URL, req.HTML)
+	parserID, err := h.Feeder.Feed(r.Context(), req.URL, req.HTML, req.Schema)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

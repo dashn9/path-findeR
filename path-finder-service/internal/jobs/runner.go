@@ -172,7 +172,12 @@ func (r *JobRunner) run(ctx context.Context, parserID string, opts *runOpts) {
 	if r.progress != nil {
 		progressPath = r.progress.PathFor(parserID)
 	}
-	result, err := core.RunPipeline(parserID, storage.ToTuples(pages), r.pipeline, r.ai, progressPath)
+	// Clone the service-wide PipelineConfig and overlay the parser-specific
+	// schema (frozen at parser creation, never per-run). Empty schema falls
+	// back to the Rust core's free-discovery prompt.
+	runCfg := r.pipeline
+	runCfg.Schema = existing.Schema
+	result, err := core.RunPipeline(parserID, storage.ToTuples(pages), runCfg, r.ai, progressPath)
 	if err != nil {
 		slog.Error("pipeline failed", "parser_id", parserID, "err", err)
 		errStr := err.Error()
